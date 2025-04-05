@@ -1,405 +1,729 @@
 // public/client.js
-import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js'; // Use module version for imports
+// Use module THREE version if available locally or adjust path
+import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+// Consider adding OrbitControls for debugging if needed
+// import { OrbitControls } from 'https://threejs.org/examples/jsm/controls/OrbitControls.js';
+// import { TextGeometry } from 'https://threejs.org/examples/jsm/geometries/TextGeometry.js'; // For 3D text names
+// import { FontLoader } from 'https://threejs.org/examples/jsm/loaders/FontLoader.js';     // For 3D text names
 
 // --- Global Variables ---
-let scene, camera, renderer;
-let playerMesh, playerLight; // Our player's representation and a light source following them
-let otherPlayers = {}; // Store meshes of other players { socketId: mesh }
-let resourcesOnScreen = {}; // Store meshes of resources { resourceId: mesh }
-let flowersOnScreen = {}; // Store meshes of flowers { slotId: mesh }
+let scene, camera, renderer, controls; // Added controls for potential debugging
+let playerMesh, playerLight, myPlayerNameMesh; // Added name mesh
+let otherPlayers = {}; // { socketId: { mesh: playerMesh, nameMesh: nameMesh } }
+let resourcesOnScreen = {}; // { resourceId: mesh }
+let flowersOnScreen = {}; // { slotId: mesh }
 let gardenGrid, gardenPlane;
-let keys = {}; // Keep track of currently pressed keys
+let keys = {};
 let clock = new THREE.Clock();
 let socket;
-let myPlayerId;
-
-// --- DOM Elements ---
-const gameContainer = document.getElementById('game-container');
-const timerDisplay = document.getElementById('timer');
-const resourcesDisplay = document.getElementById('resources');
-const weatherDisplay = document.getElementById('weather');
-const messageDisplay = document.getElementById('message');
+let myPlayerId, myPlayerName, partnerName;
+let currentRoomId; // Track the room we are in
 
 // --- Game State (Client Side) ---
 let clientState = {
     resources: { petals: 0, water: 0 },
     weather: 'Sunny',
-    timer: 1800,
-    flowers: {}, // { slotId: { stage, plantedBy } } - mirrors server state
-    flowerSlots: [] // Define positions for flowers
+    timer: 1800, // Will be set by server
+    gameDuration: 1800, // Will be set by server
+    flowers: {},
+    flowerSlots: [],
+    gameState: 'setup', // 'setup', 'waiting', 'playing', 'finished'
+    nearbyAction: null // { type: 'plant'/'nurture', targetId: slotId }
 };
+let gameStartTime = null; // Track when 'playing' state begins for helpers
+
+// --- DOM Elements ---
+const overlay = document.getElementById('overlay');
+const introScreen = document.getElementById('intro-screen');
+const setupScreen = document.getElementById('setup-screen');
+const startSetupButton = document.getElementById('start-setup-button');
+const playerNameInput = document.getElementById('player-name');
+const hostButton = document.getElementById('host-button');
+const joinButton = document.getElementById('join-button');
+const timeLimitSelect = document.getElementById('time-limit');
+const roomIdInput = document.getElementById('room-id-input');
+const roomIdDisplay = document.getElementById('room-id-display');
+const roomIdText = roomIdDisplay.querySelector('strong');
+const setupError = document.getElementById('setup-error');
+const waitingMessage = document.getElementById('waiting-message');
+
+const gameUI = document.getElementById('game-ui');
+const gameContainer = document.getElementById('game-container');
+const timerDisplay = document.getElementById('timer');
+const resourcesDisplay = document.getElementById('resources');
+const weatherDisplay = document.getElementById('weather');
+const myNameDisplay = document.getElementById('my-name');
+const partnerNameDisplay = document.getElementById('partner-name');
+const messageDisplay = document.getElementById('message');
+const timedHelperDisplay = document.getElementById('timed-helper');
+const actionPromptDisplay = document.getElementById('action-prompt');
+
 
 // --- Constants ---
 const PLAYER_SPEED = 5.0;
 const GARDEN_SIZE = 20;
 const GRID_DIVISIONS = 20;
-const FLOWER_SLOT_POSITIONS = [ // Example positions relative to garden center
+const FLOWER_SLOT_POSITIONS = [ // Must match server
     { x: -5, z: -5 }, { x: 0, z: -5 }, { x: 5, z: -5 },
     { x: -5, z: 0 },  { x: 0, z: 0 },  { x: 5, z: 0 },
     { x: -5, z: 5 },  { x: 0, z: 5 },  { x: 5, z: 5 },
 ];
+const PLAYER_NAME_OFFSET = new THREE.Vector3(0, 1.5, 0); // Offset for name tag above player
+const CAMERA_OFFSET = new THREE.Vector3(0, 12, 14); // Camera distance from player
+const ACTION_RADIUS_SQ = 2.0 * 2.0; // Squared radius for Planting/Nurturing prompts
+const HELPER_DURATION = 600; // Show helpers for 10 minutes (600 seconds)
 
 
 // --- Initialization ---
 function init() {
-    // 1. Scene
+    setupUIListeners();
+    // Don't init Three.js until game starts
+}
+
+function initThreeJS() {
+    if (scene) return; // Prevent double initialization
+
+    // Scene
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+    scene.background = new THREE.Color(0x87CEEB); // Default sunny sky blue
 
-    // 2. Camera
+    // Camera (Perspective)
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 15, 15); // Position camera slightly above and back
-    camera.lookAt(0, 0, 0); // Look at the center of the scene
+    // Camera position will be updated in animate() to follow player
 
-    // 3. Renderer
+    // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio); // Better resolution on high DPI screens
+    renderer.shadowMap.enabled = true; // Enable shadows for cuter look (needs lights configured)
     gameContainer.appendChild(renderer.domElement);
 
-    // 4. Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Soft white light
+    // Lighting (Improved for cuteness)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Brighter ambient
     scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(5, 10, 7);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // Brighter directional
+    directionalLight.position.set(8, 15, 10);
+    directionalLight.castShadow = true; // Enable shadows
+    // Configure shadow properties for softness (adjust as needed)
+    directionalLight.shadow.mapSize.width = 1024;
+    directionalLight.shadow.mapSize.height = 1024;
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 50;
+    directionalLight.shadow.camera.left = -GARDEN_SIZE / 2;
+    directionalLight.shadow.camera.right = GARDEN_SIZE / 2;
+    directionalLight.shadow.camera.top = GARDEN_SIZE / 2;
+    directionalLight.shadow.camera.bottom = -GARDEN_SIZE / 2;
     scene.add(directionalLight);
+    // const lightHelper = new THREE.DirectionalLightHelper(directionalLight, 5); // Debug helper
+    // scene.add(lightHelper);
+    // const shadowHelper = new THREE.CameraHelper(directionalLight.shadow.camera); // Debug helper
+    // scene.add(shadowHelper);
+
 
     // --- Create Game Elements ---
-
-    // Garden Grid & Plane
     createGarden();
+    initFlowerSlots(); // Creates visual markers and populates clientState.flowerSlots
 
-    // Player Mesh (Placeholder Cube)
-    const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
-    const playerMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 }); // Green cube
+    // Player Mesh (Self) - Use a slightly cuter shape? Sphere for now.
+    const playerGeometry = new THREE.SphereGeometry(0.6, 16, 16); // Rounded shape
+    const playerMaterial = new THREE.MeshStandardMaterial({ color: 0x90ee90, roughness: 0.7 }); // Light green, less shiny
     playerMesh = new THREE.Mesh(playerGeometry, playerMaterial);
-    playerMesh.position.set(0, 0.5, 0); // Start slightly above the ground
+    playerMesh.castShadow = true; // Player casts shadow
+    playerMesh.position.set(0, 0.6, 0); // Adjust Y based on sphere radius
     scene.add(playerMesh);
-    
-    // Add a light source attached to the player
-    playerLight = new THREE.PointLight(0xffffff, 0.7, 15); // White light, intensity, distance
-    playerLight.position.set(0, 2, 0); // Position relative to player mesh origin
-    playerMesh.add(playerLight); // Attach light to player mesh
 
+    // Player Point Light (Softer)
+    playerLight = new THREE.PointLight(0xfff8d6, 0.6, 10); // Warmer, softer light
+    playerLight.position.set(0, 1.5, 0); // Position relative to player mesh
+    playerMesh.add(playerLight); // Attach light
 
-    // Initialize Flower Slots visually (optional placeholders)
-    initFlowerSlots();
+    // Player Name Mesh (Placeholder - requires FontLoader and TextGeometry setup)
+    // createPlayerNameMesh(myPlayerName || "You", playerMesh); // Create name tag for self
 
-    // --- Event Listeners ---
+    // --- Controls (Optional: For Debugging) ---
+    // controls = new OrbitControls(camera, renderer.domElement);
+    // controls.target.copy(playerMesh.position); // Initial target
+    // controls.update();
+
+    // Event Listeners for game window
     window.addEventListener('resize', onWindowResize, false);
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
 
-    // --- Connect to Server ---
-    setupSocketIO();
-
-    // --- Start Animation Loop ---
+    // Start Animation Loop
     animate();
 }
 
+// --- UI Setup and Listeners ---
+function setupUIListeners() {
+    startSetupButton.addEventListener('click', () => {
+        introScreen.classList.remove('active');
+        introScreen.style.display = 'none'; // Hide completely
+        setupScreen.style.display = 'block'; // Show setup
+        setupScreen.classList.add('active');
+    });
+
+    hostButton.addEventListener('click', () => {
+        const name = playerNameInput.value.trim() || `Player_${Math.random().toString(36).substring(7)}`;
+        const duration = timeLimitSelect.value;
+        if (name) {
+            myPlayerName = name;
+            myNameDisplay.textContent = myPlayerName; // Update UI immediately
+            setSetupStatus("Connecting...", true);
+            socket.emit('hostGame', { playerName: name, duration: duration });
+        } else {
+             setSetupStatus("Please enter a name.", false, true);
+        }
+    });
+
+    joinButton.addEventListener('click', () => {
+        const name = playerNameInput.value.trim() || `Player_${Math.random().toString(36).substring(7)}`;
+        const roomId = roomIdInput.value.trim().toUpperCase();
+        if (name && roomId) {
+             myPlayerName = name;
+             myNameDisplay.textContent = myPlayerName; // Update UI immediately
+             setSetupStatus("Joining room...", true);
+            socket.emit('joinGame', { playerName: name, roomId: roomId });
+        } else if (!name) {
+             setSetupStatus("Please enter a name.", false, true);
+        } else {
+            setSetupStatus("Please enter a Room ID.", false, true);
+        }
+    });
+
+    // Connect to Socket.IO only AFTER basic setup interaction (or on load)
+    setupSocketIO();
+}
+
+function setSetupStatus(message, isLoading = false, isError = false) {
+     setupError.textContent = message;
+     setupError.style.color = isError ? '#d9534f' : '#6b4f4f'; // Error color or normal
+     waitingMessage.classList.add('hidden'); // Hide waiting message by default
+     roomIdDisplay.classList.add('hidden'); // Hide room ID by default
+
+     hostButton.disabled = isLoading;
+     joinButton.disabled = isLoading;
+     playerNameInput.disabled = isLoading;
+     roomIdInput.disabled = isLoading;
+     timeLimitSelect.disabled = isLoading;
+}
+
+function showWaitingState(roomId) {
+    setSetupStatus("", true); // Clear errors, disable buttons
+    roomIdText.textContent = roomId;
+    roomIdDisplay.classList.remove('hidden');
+    waitingMessage.classList.remove('hidden');
+}
+
+function hideSetupUIAndStartGame() {
+    overlay.classList.add('hidden'); // Hide the entire setup overlay
+    gameUI.classList.remove('hidden'); // Show the in-game UI
+    clientState.gameState = 'playing';
+    gameStartTime = Date.now(); // Record game start time for helpers
+    initThreeJS(); // Initialize the 3D environment now
+}
+
+
 // --- Socket.IO Setup ---
 function setupSocketIO() {
-    // Connect to the Socket.IO server (URL should match your server)
-    socket = io(); // Assumes server is on the same host/port
+    socket = io();
 
     socket.on('connect', () => {
         console.log('Connected to server!', socket.id);
+        // If returning to setup after disconnect, clear status
+        if (clientState.gameState === 'setup') {
+            setSetupStatus("");
+        }
     });
 
     socket.on('disconnect', () => {
         console.log('Disconnected from server!');
-        messageDisplay.textContent = 'Disconnected. Please refresh.';
-        // Handle disconnection state in UI/game
-    });
-
-    socket.on('initialState', (state) => {
-        console.log('Received initial state:', state);
-        myPlayerId = state.playerId;
-        clientState.timer = state.timer;
-        clientState.weather = state.weather;
-        clientState.flowers = state.flowers || {}; // Ensure flowers object exists
-
-        // Set our player's initial position (server might override later if needed)
-        if (state.players[myPlayerId]) {
-             playerMesh.position.copy(state.players[myPlayerId].position);
-             clientState.resources = state.players[myPlayerId].resources; // Get initial resources
-        }
-
-        // Add existing players
-        for (const id in state.players) {
-            if (id !== myPlayerId) {
-                addOtherPlayer(state.players[id]);
-            }
-        }
-        
-        // Add existing resources
-        state.resources.forEach(resource => {
-            addResource(resource);
-        });
-        
-        // Render existing flowers based on state
-        renderAllFlowersFromState();
-
-        updateUI(); // Update UI with initial state
-    });
-
-    socket.on('gameStateReset', (state) => {
-        console.log("Received game state reset from server.");
-        
-        // Clear local resources
-        for (const id in resourcesOnScreen) {
-            scene.remove(resourcesOnScreen[id]);
-        }
-        resourcesOnScreen = {};
-        
-        // Clear local flowers
-        renderAllFlowersFromState(); // This will clear based on empty state.flowers
-        
-        // Update client state variables
-        clientState.flowers = state.flowers; // Should be {}
-        clientState.timer = state.timer;
-        clientState.weather = state.weather;
-        
-        // Reset player resources locally (server should send updated ones if needed)
-        // Or wait for an 'updatePlayerResources' event after reset if server sends it
-        // clientState.resources = { petals: 0, water: 0 }; 
-        
-        messageDisplay.textContent = ''; // Clear end game message
-        
-        updateUI();
-        updateWeatherEffects(clientState.weather);
-    });
-
-    socket.on('playerJoined', (playerData) => {
-        console.log('Player joined:', playerData.id);
-        if (playerData.id !== myPlayerId) {
-            addOtherPlayer(playerData);
-        }
-    });
-
-    socket.on('playerLeft', (playerId) => {
-        console.log('Player left:', playerId);
-        removeOtherPlayer(playerId);
-    });
-
-    socket.on('playerMoved', (data) => {
-        if (otherPlayers[data.id]) {
-            // Smooth movement could be added here (e.g., lerping)
-            otherPlayers[data.id].position.copy(data.position);
-        }
-    });
-    
-    socket.on('resourceSpawned', (resource) => {
-        console.log('Resource spawned:', resource.id, resource.type);
-        addResource(resource);
-    });
-    
-    socket.on('resourceRemoved', (resourceId) => {
-        console.log('Resource removed:', resourceId);
-        removeResource(resourceId);
-    });
-
-    socket.on('updatePlayerResources', (resources) => {
-        console.log("My resources updated:", resources);
-        clientState.resources = resources;
-        updateUI();
-    });
-    
-    socket.on('flowerPlanted', (flowerData) => {
-        console.log('Flower planted:', flowerData);
-        clientState.flowers[flowerData.slotId] = flowerData;
-        renderFlower(flowerData.slotId); // Create or update the flower mesh
-        updateUI(); // Potentially update flower status UI element
-    });
-    
-    socket.on('flowerGrown', (flowerData) => {
-         console.log('Flower grown:', flowerData);
-        clientState.flowers[flowerData.slotId] = flowerData;
-        renderFlower(flowerData.slotId); // Update the flower mesh to new stage
-        updateUI();
-    });
-    
-    socket.on('weatherUpdate', (newWeather) => {
-        console.log('Weather updated:', newWeather);
-        clientState.weather = newWeather;
-        // Optionally change scene appearance based on weather (e.g., lighting, fog)
-        updateWeatherEffects(newWeather); 
-        updateUI();
-    });
-    
-    socket.on('timerUpdate', (newTime) => {
-        clientState.timer = newTime;
-        updateUI();
-    });
-    
-    socket.on('gameOver', (data) => {
-        console.log('Game Over:', data.message);
-        messageDisplay.textContent = data.message;
-        // Freeze player movement, show final screen, etc.
-        // For now, just display the message
-        keys = {}; // Stop movement
+        // Handle disconnection - show overlay, error message?
+         if (clientState.gameState !== 'finished') {
+            showOverlayWithMessage("Disconnected from server. Please refresh.");
+            clientState.gameState = 'setup'; // Reset state
+            // Clear game elements? Or rely on refresh?
+         }
     });
 
     socket.on('connect_error', (err) => {
         console.error("Connection Error:", err.message);
-        messageDisplay.textContent = 'Cannot connect to server. Please refresh later.';
+        if (clientState.gameState === 'setup') {
+             setSetupStatus(`Cannot connect: ${err.message}`, false, true);
+        } else {
+            showOverlayWithMessage(`Connection Error: ${err.message}. Please refresh.`);
+        }
     });
+
+    socket.on('setupError', ({ message }) => {
+        setSetupStatus(message, false, true); // Show error, re-enable buttons
+    });
+
+    socket.on('roomCreated', ({ roomId, initialState, playerId }) => {
+        console.log(`Room ${roomId} created. Waiting for partner.`);
+        currentRoomId = roomId;
+        myPlayerId = playerId;
+        initializeClientState(initialState);
+        clientState.gameState = 'waiting';
+        showWaitingState(roomId);
+    });
+
+    socket.on('joinedRoom', ({ roomId, initialState, playerId }) => {
+        console.log(`Joined room ${roomId}.`);
+        currentRoomId = roomId;
+        myPlayerId = playerId;
+        initializeClientState(initialState);
+        // If room already has 2 players, server might immediately send gameStart
+        // Otherwise, we wait for partnerJoined or gameStart signal
+        if (Object.keys(initialState.players).length === 2) {
+            console.log("Room full on join, expecting gameStart soon.");
+             partnerName = Object.values(initialState.players).find(p => p.id !== myPlayerId)?.name || 'Partner';
+             partnerNameDisplay.textContent = partnerName;
+             // Don't start rendering yet, wait for gameStart event
+        } else {
+             clientState.gameState = 'waiting';
+             showWaitingState(roomId); // Should already be waiting, but safe fallback
+        }
+    });
+
+    socket.on('partnerJoined', (partnerData) => {
+        console.log('Partner joined:', partnerData.name);
+        partnerName = partnerData.name;
+        partnerNameDisplay.textContent = partnerName;
+        addOtherPlayer(partnerData); // Add partner's mesh if game already started visually
+        waitingMessage.classList.add('hidden'); // Hide waiting message
+        // Server will likely send gameStart next
+    });
+
+     socket.on('partnerLeft', ({ message }) => {
+        console.log('Partner left:', message);
+        messageDisplay.textContent = message; // Show disconnect message
+        partnerNameDisplay.textContent = "Disconnected";
+        clientState.gameState = 'waiting'; // Or 'finished' maybe?
+        timedHelperDisplay.classList.add('hidden'); // Hide helpers
+        actionPromptDisplay.classList.add('hidden'); // Hide prompts
+        // Find and remove partner's mesh
+        const partnerId = Object.keys(otherPlayers)[0]; // Assuming only one other player
+        if (partnerId) {
+            removeOtherPlayer(partnerId);
+        }
+        // Consider showing the setup overlay again? Or a "Waiting for partner" screen?
+        // For now, just stops updates and shows message.
+    });
+
+    socket.on('gameStart', ({ message }) => {
+        console.log("Game starting!", message);
+        messageDisplay.textContent = message;
+        setTimeout(() => messageDisplay.textContent = "", 3000); // Clear message after delay
+        hideSetupUIAndStartGame(); // Hide setup, init 3D, start rendering
+    });
+
+    // --- Game State Sync Handlers ---
+    socket.on('initialState', (state) => {
+        // This might be redundant now with roomCreated/joinedRoom providing initial state
+        console.log('Received initial state (redundant?):', state);
+        // initializeClientState(state); // Could use this as a fallback
+    });
+
+     socket.on('gameStateReset', (state) => {
+        console.log("Received game state reset from server.");
+        clearLocalGameState(); // Clear meshes, etc.
+        // Re-apply server state
+        clientState.timer = state.timer;
+        clientState.weather = state.weather;
+        clientState.flowers = state.flowers || {};
+        clientState.resources = { petals: 0, water: 0 }; // Reset local resources too
+        // Re-render based on new empty state
+        renderAllFlowersFromState();
+        // Resources will be added via resourceSpawned events
+        updateUI();
+        updateWeatherEffects(clientState.weather);
+        messageDisplay.textContent = 'New round started!'; // Or similar
+        setTimeout(() => messageDisplay.textContent = "", 3000);
+        gameStartTime = Date.now(); // Reset helper timer
+    });
+
+
+    socket.on('playerMoved', (data) => {
+        if (otherPlayers[data.id]) {
+            // Add smoothing (lerp) for cuter movement
+             otherPlayers[data.id].mesh.position.lerp(data.position, 0.3); // Adjust lerp factor (0.1-0.5)
+            // Name tag follows mesh
+            // if (otherPlayers[data.id].nameMesh) {
+            //    otherPlayers[data.id].nameMesh.position.copy(otherPlayers[data.id].mesh.position).add(PLAYER_NAME_OFFSET);
+            //}
+        } else {
+             // If player moved but wasn't added yet (timing issue?), add them now
+             // Requires server to send full player data on move, or fetch it
+             console.warn("Received move for unknown player:", data.id);
+        }
+    });
+
+    socket.on('resourceSpawned', (resource) => addResource(resource));
+    socket.on('resourceRemoved', (resourceId) => removeResource(resourceId));
+    socket.on('updatePlayerResources', (resources) => {
+        clientState.resources = resources; updateUI();
+    });
+    socket.on('flowerPlanted', (flowerData) => {
+        clientState.flowers[flowerData.slotId] = flowerData; renderFlower(flowerData.slotId); updateUI();
+        // ADD SOUND Placeholder: Planting sound effect
+        // console.log("PLAY_SOUND: plant_success.wav");
+         // ADD PARTICLE Placeholder: Sparkle effect at plant location
+        // console.log("SPAWN_PARTICLE: plant_sparkle at", flowerData.slotId);
+    });
+    socket.on('flowerGrown', (flowerData) => {
+        clientState.flowers[flowerData.slotId] = flowerData; renderFlower(flowerData.slotId); updateUI();
+        // ADD SOUND Placeholder: Growth/Level up sound
+        // console.log("PLAY_SOUND: flower_grow.wav");
+         // ADD PARTICLE Placeholder: Growing sparkle effect
+        // console.log("SPAWN_PARTICLE: grow_sparkle at", flowerData.slotId);
+        if(flowerData.stage === 'bloom'){
+            // ADD SOUND Placeholder: Full bloom magical sound
+            // console.log("PLAY_SOUND: flower_bloom_final.wav");
+            // ADD PARTICLE Placeholder: Big bloom celebration effect
+            // console.log("SPAWN_PARTICLE: bloom_celebration at", flowerData.slotId);
+        }
+    });
+     socket.on('actionFailed', ({ message }) => {
+         console.log("Action failed:", message);
+         messageDisplay.textContent = message;
+         // ADD SOUND Placeholder: Error/fail sound
+         // console.log("PLAY_SOUND: action_fail.wav");
+         setTimeout(() => messageDisplay.textContent = "", 2000); // Clear fail message
+     });
+    socket.on('weatherUpdate', (newWeather) => {
+        clientState.weather = newWeather; updateWeatherEffects(newWeather); updateUI();
+         // ADD SOUND Placeholder: Weather change sound (wind, rain drops, sunny jingle)
+        // console.log(`PLAY_SOUND: weather_${newWeather.toLowerCase()}.wav`);
+    });
+    socket.on('timerUpdate', (newTime) => { clientState.timer = newTime; updateUI(); });
+    socket.on('gameOver', (data) => {
+        console.log('Game Over:', data.message);
+        clientState.gameState = 'finished';
+        keys = {}; // Stop movement
+        actionPromptDisplay.classList.add('hidden'); // Hide prompts
+        timedHelperDisplay.classList.add('hidden'); // Hide helpers
+        // Show final message in a more prominent way?
+        showOverlayWithMessage(data.message + "\n\nRefresh to play again!");
+         // ADD SOUND Placeholder: Game over / results sound
+         // console.log("PLAY_SOUND: game_over.wav");
+    });
+}
+
+function initializeClientState(initialState) {
+     console.log("Initializing client state with data:", initialState);
+     clientState.timer = initialState.timer || DEFAULT_GAME_DURATION;
+     clientState.gameDuration = initialState.gameDuration || DEFAULT_GAME_DURATION;
+     clientState.weather = initialState.weather || 'Sunny';
+     clientState.flowers = initialState.flowers || {};
+     clientState.resources = { petals: 0, water: 0 }; // Start with 0, server will send updates
+
+     // Find my player data and partner data
+     const myData = initialState.players[myPlayerId];
+     if (myData) {
+         clientState.resources = myData.resources; // Get my starting resources
+         // Set initial position IF the player mesh exists (may not yet)
+         if (playerMesh) playerMesh.position.copy(myData.position);
+     }
+
+     // Clear existing local state representations
+     clearLocalGameState();
+
+     // Add players (self and partner) from initial state
+     for (const pId in initialState.players) {
+         if (pId === myPlayerId) {
+            // Update self if needed (name already set during setup)
+         } else {
+             partnerName = initialState.players[pId].name;
+             partnerNameDisplay.textContent = partnerName;
+             addOtherPlayer(initialState.players[pId]); // Add partner mesh if game view is active
+         }
+     }
+
+     // Add existing resources & flowers if game view is active
+     if (clientState.gameState === 'playing') { // Only render if game already started visually
+        initialState.resources?.forEach(res => addResource(res)); // Use ?. for safety
+        renderAllFlowersFromState();
+     }
+
+     updateUI(); // Update UI elements
+     if (scene) updateWeatherEffects(clientState.weather); // Update visual weather if scene exists
+}
+
+function clearLocalGameState() {
+    // Remove other player meshes
+    for (const pId in otherPlayers) {
+        removeOtherPlayer(pId);
+    }
+    otherPlayers = {};
+    // Remove resource meshes
+    for (const rId in resourcesOnScreen) {
+        scene?.remove(resourcesOnScreen[rId]); // Check if scene exists
+    }
+    resourcesOnScreen = {};
+    // Remove flower meshes
+    for (const fId in flowersOnScreen) {
+        scene?.remove(flowersOnScreen[fId]);
+    }
+    flowersOnScreen = {};
+}
+
+function showOverlayWithMessage(message) {
+     // Re-purpose intro screen to show messages
+     introScreen.innerHTML = `<h2>Game Over</h2><p>${message.replace(/\n/g, '<br>')}</p>`; // Use innerHTML to allow line breaks
+     introScreen.style.display = 'block';
+     introScreen.classList.add('active');
+     setupScreen.style.display = 'none'; // Hide setup screen
+     setupScreen.classList.remove('active');
+     overlay.classList.remove('hidden'); // Show the overlay
+     gameUI.classList.add('hidden'); // Hide game UI
 }
 
 
 // --- Game Element Creation ---
 
 function createGarden() {
-    // Garden Plane (Ground)
+    // Garden Plane (Ground) - Improved look
     const planeGeometry = new THREE.PlaneGeometry(GARDEN_SIZE, GARDEN_SIZE);
-    const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, side: THREE.DoubleSide }); // Forest green
+    // Use a texture for cuter ground? Placeholder: color
+    const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x98bf64, roughness: 0.9 }); // Softer green
     gardenPlane = new THREE.Mesh(planeGeometry, planeMaterial);
-    gardenPlane.rotation.x = -Math.PI / 2; // Rotate to lay flat
+    gardenPlane.rotation.x = -Math.PI / 2;
+    gardenPlane.receiveShadow = true; // Ground receives shadows
     scene.add(gardenPlane);
 
-    // Grid Helper (Visual Aid)
-    gardenGrid = new THREE.GridHelper(GARDEN_SIZE, GRID_DIVISIONS, 0x888888, 0x444444);
-    gardenGrid.position.y = 0.01; // Slightly above the plane to avoid z-fighting
-    scene.add(gardenGrid);
+    // Grid Helper (Optional: Can be toggled off for cleaner look)
+    // gardenGrid = new THREE.GridHelper(GARDEN_SIZE, GRID_DIVISIONS, 0x888888, 0x666666);
+    // gardenGrid.position.y = 0.01;
+    // scene.add(gardenGrid);
 }
 
 function initFlowerSlots() {
-    // Optional: Add visual markers for where flowers can be planted
-    const slotGeometry = new THREE.CircleGeometry(0.5, 16); // Small circle on the ground
-    const slotMaterial = new THREE.MeshBasicMaterial({ color: 0x654321, side: THREE.DoubleSide, transparent: true, opacity: 0.5 }); // Brownish, semi-transparent
-    
+    clientState.flowerSlots = []; // Clear existing slots data
+    // Slightly raised, cuter dirt plot marker
+    const slotGeometry = new THREE.CylinderGeometry(0.6, 0.6, 0.1, 16); // Flat cylinder
+    const slotMaterial = new THREE.MeshStandardMaterial({ color: 0x966919, roughness: 0.8 }); // Dirt color
+    const slotOutlineMaterial = new THREE.LineBasicMaterial( { color: 0x6b4f4f, linewidth: 2 } ); // Darker outline
+
     FLOWER_SLOT_POSITIONS.forEach((pos, index) => {
         const slotMesh = new THREE.Mesh(slotGeometry, slotMaterial);
-        slotMesh.rotation.x = -Math.PI / 2;
-        slotMesh.position.set(pos.x, 0.02, pos.z); // Place slightly above ground
+        slotMesh.position.set(pos.x, 0.05, pos.z); // Place slightly above ground
+        slotMesh.receiveShadow = true; // Plot receives shadows
         scene.add(slotMesh);
+
+        // Add outline (optional, can impact performance)
+        // const edges = new THREE.EdgesGeometry( slotGeometry );
+        // const line = new THREE.LineSegments( edges, slotOutlineMaterial );
+        // line.position.copy(slotMesh.position);
+        // scene.add(line);
+
         // Store the slot position with an ID for later reference
-        clientState.flowerSlots.push({ id: `slot_${index}`, position: pos });
+        clientState.flowerSlots.push({ id: `slot_${index}`, position: pos, mesh: slotMesh /* Store mesh reference */ });
     });
 }
 
 function addOtherPlayer(playerData) {
-    if (otherPlayers[playerData.id]) return; // Already exists
+    if (!scene || otherPlayers[playerData.id] || playerData.id === myPlayerId) return; // Don't add self or if scene not ready
 
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    // Give other players a different color
-    const material = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Red cube
+    const geometry = new THREE.SphereGeometry(0.6, 16, 16); // Same shape as player
+    const material = new THREE.MeshStandardMaterial({ color: 0xffa07a, roughness: 0.7 }); // Light salmon color for partner
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
     mesh.position.copy(playerData.position);
-    otherPlayers[playerData.id] = mesh;
     scene.add(mesh);
+
+    // Add name tag (Placeholder)
+    // const nameMesh = createPlayerNameMesh(playerData.name || "Partner", mesh);
+
+    otherPlayers[playerData.id] = { mesh: mesh /* , nameMesh: nameMesh */ };
 }
 
 function removeOtherPlayer(playerId) {
     if (otherPlayers[playerId]) {
-        scene.remove(otherPlayers[playerId]);
+        scene.remove(otherPlayers[playerId].mesh);
+        // if (otherPlayers[playerId].nameMesh) scene.remove(otherPlayers[playerId].nameMesh);
         delete otherPlayers[playerId];
     }
 }
 
+// Placeholder function for creating 3D text name tags
+// function createPlayerNameMesh(name, parentMesh) {
+//     // Requires FontLoader and TextGeometry
+//     // Example (needs font file loaded):
+//     /*
+//     const loader = new FontLoader();
+//     loader.load( 'path/to/font.typeface.json', function ( font ) {
+//         const textGeo = new TextGeometry( name, {
+//             font: font,
+//             size: 0.3, height: 0.05, curveSegments: 4,
+//             bevelEnabled: false
+//         });
+//         const textMaterial = new THREE.MeshBasicMaterial( { color: 0xffffff } );
+//         const nameMesh = new THREE.Mesh( textGeo, textMaterial );
+//         nameMesh.position.copy(parentMesh.position).add(PLAYER_NAME_OFFSET);
+//         scene.add( nameMesh );
+//         // Store reference if needed: parentMesh.userData.nameMesh = nameMesh;
+//          return nameMesh; // This async nature is tricky here, better handled differently
+//     });
+//     */
+//     console.warn("3D Text name tags require FontLoader setup.");
+//     return null; // Placeholder
+// }
+
 function addResource(resource) {
-    if (resourcesOnScreen[resource.id]) return; // Avoid duplicates
+    if (!scene || resourcesOnScreen[resource.id]) return;
 
     let geometry, material;
+    const resourceSize = 0.25; // Slightly bigger resources
     if (resource.type === 'petal') {
-        geometry = new THREE.SphereGeometry(0.2, 8, 8); // Small sphere
-        material = new THREE.MeshBasicMaterial({ color: 0xFFC0CB }); // Pink
+        // Simple heart shape? Placeholder: Sphere
+        geometry = new THREE.SphereGeometry(resourceSize, 12, 12);
+        material = new THREE.MeshStandardMaterial({ color: 0xFF69B4, roughness: 0.6, metalness: 0.1 }); // Hot pink, less rough
     } else { // water
-        geometry = new THREE.SphereGeometry(0.2, 8, 8); // Small sphere
-        material = new THREE.MeshBasicMaterial({ color: 0xADD8E6 }); // Light Blue
+        // Teardrop shape? Placeholder: Sphere
+        geometry = new THREE.SphereGeometry(resourceSize, 12, 12);
+        material = new THREE.MeshStandardMaterial({ color: 0x87CEFA, roughness: 0.4, metalness: 0.2 }); // Light sky blue, slightly metallic
     }
-    
+
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(resource.position); // Use position from server
+    mesh.castShadow = true;
+    mesh.position.copy(resource.position);
     resourcesOnScreen[resource.id] = mesh;
     scene.add(mesh);
 }
 
 function removeResource(resourceId) {
     if (resourcesOnScreen[resourceId]) {
+         // ADD PARTICLE Placeholder: Collection puff/sparkle
+        // console.log("SPAWN_PARTICLE: resource_collect at", resourcesOnScreen[resourceId].position);
+         // ADD SOUND Placeholder: Resource collection sound
+        // console.log("PLAY_SOUND: collect.wav");
+
         scene.remove(resourcesOnScreen[resourceId]);
         delete resourcesOnScreen[resourceId];
     }
 }
 
-// --- Flower Rendering & Growth ---
+// --- Flower Rendering & Growth (More detailed stages) ---
 function renderFlower(slotId) {
     const flowerData = clientState.flowers[slotId];
-    if (!flowerData) {
-        // Flower might have been removed (if implementing removal)
-        if (flowersOnScreen[slotId]) {
-            scene.remove(flowersOnScreen[slotId]);
-            delete flowersOnScreen[slotId];
-        }
-        return;
-    }
+     const slot = clientState.flowerSlots.find(s => s.id === slotId);
+     if (!scene || !slot) return; // Check scene exists
 
-    // Remove existing mesh for this slot if it exists
+    // Remove existing mesh for this slot
     if (flowersOnScreen[slotId]) {
         scene.remove(flowersOnScreen[slotId]);
+        delete flowersOnScreen[slotId];
     }
 
-    let geometry, material;
-    let scale = 1.0; // Base scale
-    const slot = clientState.flowerSlots.find(s => s.id === slotId);
-    if (!slot) {
-        console.error("Slot not found for ID:", slotId);
-        return;
-    }
-    
+    if (!flowerData) return; // Flower was removed or doesn't exist
+
+    let flowerGroup = new THREE.Group(); // Use a group for multi-part flowers
     const position = new THREE.Vector3(slot.position.x, 0, slot.position.z); // Base position on ground
 
-    // Define appearance based on growth stage
+    let stemHeight = 0;
+    const stemGeo = new THREE.CylinderGeometry(0.05, 0.08, 1, 8); // Tapered stem
+    const stemMat = new THREE.MeshStandardMaterial({ color: 0x56ab2f, roughness: 0.7 }); // Leafy green
+
+    // Define appearance based on growth stage (using Group)
     switch (flowerData.stage) {
         case 'seed':
-            geometry = new THREE.SphereGeometry(0.1, 8, 8);
-            material = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
-            position.y = 0.1;
+            const seedGeo = new THREE.SphereGeometry(0.15, 8, 8);
+            const seedMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
+            const seedMesh = new THREE.Mesh(seedGeo, seedMat);
+            seedMesh.position.y = 0.1;
+            flowerGroup.add(seedMesh);
             break;
         case 'sprout':
-            geometry = new THREE.ConeGeometry(0.15, 0.5, 8);
-            material = new THREE.MeshStandardMaterial({ color: 0x90EE90 }); // Light Green
-            position.y = 0.25; // Adjust height based on cone origin
+            stemHeight = 0.4;
+            const sproutStem = new THREE.Mesh(stemGeo, stemMat);
+            sproutStem.scale.set(1, stemHeight, 1);
+            sproutStem.position.y = stemHeight / 2; // Center the scaled stem
+            flowerGroup.add(sproutStem);
+
+            // Add tiny leaves
+            const leafGeo = new THREE.SphereGeometry(0.1, 8, 8); // Simple leaf placeholder
+            const leafMat = new THREE.MeshStandardMaterial({ color: 0x90EE90 });
+            const leaf1 = new THREE.Mesh(leafGeo, leafMat);
+            const leaf2 = leaf1.clone();
+            leaf1.position.set(0.1, stemHeight * 0.8, 0);
+            leaf1.scale.set(1, 0.5, 0.2); // Flattened leaf
+            leaf2.position.set(-0.1, stemHeight * 0.8, 0);
+            leaf2.scale.copy(leaf1.scale);
+            flowerGroup.add(leaf1);
+            flowerGroup.add(leaf2);
             break;
         case 'budding':
-            geometry = new THREE.SphereGeometry(0.3, 16, 16);
-            material = new THREE.MeshStandardMaterial({ color: 0x32CD32 }); // Lime Green
-            position.y = 0.6; // Buds are higher
-            // Optional: Add a stem (cylinder)
+             stemHeight = 0.8;
+             const buddingStem = new THREE.Mesh(stemGeo, stemMat);
+             buddingStem.scale.set(1, stemHeight, 1);
+             buddingStem.position.y = stemHeight / 2;
+             flowerGroup.add(buddingStem);
+
+             const budGeo = new THREE.SphereGeometry(0.25, 12, 12);
+             const budMat = new THREE.MeshStandardMaterial({ color: 0x32CD32 }); // Lime Green Bud
+             const budMesh = new THREE.Mesh(budGeo, budMat);
+             budMesh.position.y = stemHeight + 0.1; // Bud sits on top of stem
+             flowerGroup.add(budMesh);
             break;
         case 'bloom':
-            // More complex shape - maybe multiple spheres or a custom model later
-            geometry = new THREE.SphereGeometry(0.5, 16, 16); 
-            // Color based on who planted or random? Example: Pink
-            material = new THREE.MeshStandardMaterial({ color: 0xFF69B4, emissive: 0x330000 }); // Hot Pink, slight glow
-            position.y = 1.0; 
+            stemHeight = 1.2;
+            const bloomStem = new THREE.Mesh(stemGeo, stemMat);
+            bloomStem.scale.set(1, stemHeight, 1);
+            bloomStem.position.y = stemHeight / 2;
+            flowerGroup.add(bloomStem);
+
+            // Simple flower head - multiple spheres
+            const petalGeo = new THREE.SphereGeometry(0.3, 12, 12);
+            const petalMat = new THREE.MeshStandardMaterial({ color: 0xFFB6C1, roughness: 0.5 }); // Light Pink petals
+            const centerGeo = new THREE.SphereGeometry(0.2, 12, 12);
+            const centerMat = new THREE.MeshStandardMaterial({ color: 0xFFFFE0 }); // Light Yellow center
+
+            const centerMesh = new THREE.Mesh(centerGeo, centerMat);
+            centerMesh.position.y = stemHeight + 0.2;
+            flowerGroup.add(centerMesh);
+
+            const numPetals = 5;
+            for (let i = 0; i < numPetals; i++) {
+                const angle = (i / numPetals) * Math.PI * 2;
+                const petalMesh = new THREE.Mesh(petalGeo, petalMat);
+                petalMesh.position.y = centerMesh.position.y;
+                petalMesh.position.x = Math.cos(angle) * 0.35;
+                petalMesh.position.z = Math.sin(angle) * 0.35;
+                petalMesh.scale.set(1, 0.7, 0.5); // Flatten petals
+                flowerGroup.add(petalMesh);
+            }
+            // ADD EFFECT Placeholder: Slight emissive glow for bloom?
+            // petalMat.emissive = new THREE.Color(0x331111); // Very subtle glow
             break;
         default:
-            console.warn("Unknown flower stage:", flowerData.stage);
-            return; // Don't render unknown stage
+            console.warn("Unknown flower stage:", flowerData.stage); return;
     }
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(position);
-    mesh.scale.set(scale, scale, scale); // Apply scale
+    flowerGroup.position.copy(position);
+    flowerGroup.traverse(child => { if (child.isMesh) child.castShadow = true; }); // All parts cast shadow
+    flowersOnScreen[slotId] = flowerGroup;
+    scene.add(flowerGroup);
 
-    flowersOnScreen[slotId] = mesh;
-    scene.add(mesh);
-
-    // Simple animation (e.g., pop-in effect) - optional
-    // gsap.from(mesh.scale, { x: 0.1, y: 0.1, z: 0.1, duration: 0.5, ease: "back.out(1.7)" });
+    // Simple "pop-in" animation
+    const initialScale = 0.1;
+    flowerGroup.scale.set(initialScale, initialScale, initialScale);
+    // Need a library like GSAP for nice tweening, or manual lerp in animate()
+    // Simple immediate scale for now:
+    flowerGroup.scale.set(1,1,1); // Or animate this lerp in animate() loop
 }
 
 
 function renderAllFlowersFromState() {
+    if (!scene) return; // Don't render if scene not ready
     console.log("Rendering all flowers based on state:", clientState.flowers);
     // Clear existing flower meshes first
     for (const slotId in flowersOnScreen) {
         scene.remove(flowersOnScreen[slotId]);
     }
-    flowersOnScreen = {}; // Clear the tracker
+    flowersOnScreen = {};
 
-    // Render based on current clientState.flowers (might be empty)
-    if (clientState.flowers) { // Check if flowers object exists
+    if (clientState.flowers) {
         for (const slotId in clientState.flowers) {
             renderFlower(slotId);
         }
@@ -407,18 +731,25 @@ function renderAllFlowersFromState() {
 }
 
 
-// --- Player Input & Movement ---
+// --- Player Input & Movement & Actions ---
 
 function onKeyDown(event) {
+    if (clientState.gameState !== 'playing') return; // Only allow input during play
     keys[event.code] = true;
-    
-    // Planting Action (Example: Press 'P')
-    if (event.code === 'KeyP') {
-        tryPlantSeed();
-    }
-    // Nurturing Action (Example: Press 'N')
-    if (event.code === 'KeyN') {
-        tryNurtureFlower();
+
+    // Check for actions based on prompts
+    if (clientState.nearbyAction) {
+        if (event.code === 'KeyP' && clientState.nearbyAction.type === 'plant') {
+             console.log("Attempting to plant seed via prompt at slot:", clientState.nearbyAction.targetId);
+             socket.emit('plantFlower', { slotId: clientState.nearbyAction.targetId });
+             clientState.nearbyAction = null; // Consume action
+             actionPromptDisplay.classList.add('hidden');
+        } else if (event.code === 'KeyN' && clientState.nearbyAction.type === 'nurture') {
+             console.log("Attempting to nurture flower via prompt at slot:", clientState.nearbyAction.targetId);
+             socket.emit('nurtureFlower', { slotId: clientState.nearbyAction.targetId });
+             clientState.nearbyAction = null; // Consume action
+             actionPromptDisplay.classList.add('hidden');
+        }
     }
 }
 
@@ -427,163 +758,183 @@ function onKeyUp(event) {
 }
 
 function updatePlayerMovement(deltaTime) {
-    if (!playerMesh || !socket || !myPlayerId || clientState.timer <= 0) return; // Don't move if game over or not initialized
+    if (!playerMesh || !socket || !myPlayerId || clientState.gameState !== 'playing') return;
 
     const moveSpeed = PLAYER_SPEED * deltaTime;
     let moved = false;
     let moveDirection = new THREE.Vector3(0, 0, 0);
 
-    if (keys['KeyW'] || keys['ArrowUp']) {
-        moveDirection.z -= 1;
-        moved = true;
-    }
-    if (keys['KeyS'] || keys['ArrowDown']) {
-        moveDirection.z += 1;
-        moved = true;
-    }
-    if (keys['KeyA'] || keys['ArrowLeft']) {
-        moveDirection.x -= 1;
-        moved = true;
-    }
-    if (keys['KeyD'] || keys['ArrowRight']) {
-        moveDirection.x += 1;
-        moved = true;
-    }
+    if (keys['KeyW'] || keys['ArrowUp']) { moveDirection.z -= 1; moved = true; }
+    if (keys['KeyS'] || keys['ArrowDown']) { moveDirection.z += 1; moved = true; }
+    if (keys['KeyA'] || keys['ArrowLeft']) { moveDirection.x -= 1; moved = true; }
+    if (keys['KeyD'] || keys['ArrowRight']) { moveDirection.x += 1; moved = true; }
 
     if (moved) {
-        moveDirection.normalize(); // Ensure consistent speed diagonally
-
-        // Calculate potential new position
+        moveDirection.normalize();
         const potentialPosition = playerMesh.position.clone().add(moveDirection.multiplyScalar(moveSpeed));
-        
-        // Boundary Check (Simple clamp based on garden size)
-        const halfGarden = GARDEN_SIZE / 2 - 0.5; // Subtract half player size
+        const halfGarden = GARDEN_SIZE / 2 - 0.6; // Based on player sphere radius
         potentialPosition.x = Math.max(-halfGarden, Math.min(halfGarden, potentialPosition.x));
         potentialPosition.z = Math.max(-halfGarden, Math.min(halfGarden, potentialPosition.z));
-        
-        // Apply movement
         playerMesh.position.copy(potentialPosition);
 
+        // Update camera to follow player smoothly
+        updateCameraPosition();
 
-        // --- Check for Resource Collection ---
+        // Check for resource collection (automatic)
         checkForResourceCollection();
 
-        // --- Send position update to server ---
-        // Throttle this later if needed (e.g., send every 100ms)
+        // Check for nearby actions (planting/nurturing prompts)
+        checkForNearbyActions();
+
+        // Send position update (consider throttling later)
         socket.emit('playerMove', playerMesh.position);
     }
+
+    // Update player name mesh position
+    // if (myPlayerNameMesh) {
+    //    myPlayerNameMesh.position.copy(playerMesh.position).add(PLAYER_NAME_OFFSET);
+    // }
+}
+
+function updateCameraPosition() {
+    if (!camera || !playerMesh) return;
+     const targetPosition = playerMesh.position.clone().add(CAMERA_OFFSET);
+     // Smooth camera movement (lerp)
+     camera.position.lerp(targetPosition, 0.1); // Adjust lerp factor (0.05-0.2)
+     // Smooth lookAt
+     const lookAtTarget = playerMesh.position.clone();
+     // Use a temporary variable for lookAt lerping if needed, or just direct lookAt
+     camera.lookAt(lookAtTarget);
+
+     // if (controls) controls.target.copy(playerMesh.position); // Update OrbitControls target if used
 }
 
 
 // --- Game Mechanics ---
 
 function checkForResourceCollection() {
+    // Automatic collection on overlap
     const playerPos = playerMesh.position;
-    const collectionRadiusSq = 1.0 * 1.0; // Square of the distance threshold (adjust as needed)
+    const collectionRadiusSq = 1.0 * 1.0; // Player radius + resource radius approx
 
     for (const resourceId in resourcesOnScreen) {
         const resourceMesh = resourcesOnScreen[resourceId];
-        const distSq = playerPos.distanceToSquared(resourceMesh.position);
-
-        if (distSq < collectionRadiusSq) {
-            console.log("Player near resource:", resourceId);
-            // Tell the server we *attempt* to collect this resource
-            socket.emit('collectResource', resourceId); 
-            // We don't remove/update client state directly. Server will confirm.
-            break; // Collect one at a time per check cycle
+        if (playerPos.distanceToSquared(resourceMesh.position) < collectionRadiusSq) {
+            // console.log("Player near resource:", resourceId); // Less logging
+            socket.emit('collectResource', resourceId);
+            // Server confirms removal and resource update
+            // No need to break, can potentially collect multiple if perfectly overlapped
         }
     }
 }
 
-function tryPlantSeed() {
-    if (!socket || clientState.resources.petals <= 0) {
-        console.log("Cannot plant: No petals or not connected.");
-        // Optionally show UI message: "Need Pixel Petals to plant!"
-        return; 
-    }
+function checkForNearbyActions() {
+    // Checks for potential Plant/Nurture actions and shows prompts
+    if (!playerMesh) return;
 
     const playerPos = playerMesh.position;
-    const plantingRadiusSq = 2.0 * 2.0; // How close player needs to be to a slot
-    let closestSlot = null;
-    let minDistSq = plantingRadiusSq;
+    let possibleAction = null;
 
-    clientState.flowerSlots.forEach(slot => {
-        const slotPos = new THREE.Vector3(slot.position.x, 0, slot.position.z);
-        const distSq = playerPos.distanceToSquared(slotPos);
-        
-        // Find the closest *empty* slot within range
-        if (distSq < minDistSq && !clientState.flowers[slot.id]) {
-            minDistSq = distSq;
-            closestSlot = slot;
-        }
-    });
+    // Check for Planting
+    if (clientState.resources.petals > 0) {
+        let closestEmptySlot = null;
+        let minDistSq = ACTION_RADIUS_SQ;
 
-    if (closestSlot) {
-        console.log("Attempting to plant seed at slot:", closestSlot.id);
-        // Tell the server we want to plant here
-        socket.emit('plantFlower', { slotId: closestSlot.id });
-        // Client state updates will come back from the server on success
-    } else {
-        console.log("No empty flower slot nearby to plant in.");
-         // Optionally show UI message: "Move closer to an empty plot!"
-    }
-}
-
-function tryNurtureFlower() {
-     if (!socket || clientState.resources.water <= 0) {
-        console.log("Cannot nurture: No water or not connected.");
-        // Optionally show UI message: "Need Water Droplets to nurture!"
-        return; 
-    }
-    
-    const playerPos = playerMesh.position;
-    const nurturingRadiusSq = 2.0 * 2.0; // How close player needs to be
-    let closestFlowerSlotId = null;
-    let minDistSq = nurturingRadiusSq;
-
-    for (const slotId in clientState.flowers) {
-        const flowerData = clientState.flowers[slotId];
-        const slot = clientState.flowerSlots.find(s => s.id === slotId);
-        
-        if (slot && flowerData.stage !== 'bloom') { // Can only nurture if not fully bloomed
-            const slotPos = new THREE.Vector3(slot.position.x, 0, slot.position.z);
-             const distSq = playerPos.distanceToSquared(slotPos);
-             if (distSq < minDistSq) {
-                 minDistSq = distSq;
-                 closestFlowerSlotId = slotId;
+        clientState.flowerSlots.forEach(slot => {
+            // Check if slot is empty
+             if (!clientState.flowers[slot.id]) {
+                 const slotPos = new THREE.Vector3(slot.position.x, 0, slot.position.z);
+                 const distSq = playerPos.distanceToSquared(slotPos);
+                 if (distSq < minDistSq) {
+                     minDistSq = distSq;
+                     closestEmptySlot = slot;
+                 }
              }
+        });
+        if (closestEmptySlot) {
+            possibleAction = { type: 'plant', targetId: closestEmptySlot.id };
         }
     }
-     
-    if (closestFlowerSlotId) {
-        console.log("Attempting to nurture flower at slot:", closestFlowerSlotId);
-        // Tell the server we want to nurture this flower
-        socket.emit('nurtureFlower', { slotId: closestFlowerSlotId });
-        // Server handles resource deduction and growth logic
+
+    // Check for Nurturing (only if not already targeting planting)
+    if (!possibleAction && clientState.resources.water > 0) {
+        let closestNurturableFlower = null;
+        let minDistSq = ACTION_RADIUS_SQ;
+
+         for (const slotId in clientState.flowers) {
+             const flowerData = clientState.flowers[slotId];
+             // Can only nurture if not fully bloomed
+             if (flowerData.stage !== 'bloom') {
+                 const slot = clientState.flowerSlots.find(s => s.id === slotId);
+                 if (slot) {
+                    const slotPos = new THREE.Vector3(slot.position.x, 0, slot.position.z);
+                    const distSq = playerPos.distanceToSquared(slotPos);
+                    if (distSq < minDistSq) {
+                        minDistSq = distSq;
+                        closestNurturableFlower = slotId;
+                    }
+                 }
+             }
+         }
+         if (closestNurturableFlower) {
+             possibleAction = { type: 'nurture', targetId: closestNurturableFlower };
+         }
+    }
+
+    // Update UI Prompt
+    if (possibleAction) {
+        if (!clientState.nearbyAction || clientState.nearbyAction.targetId !== possibleAction.targetId || clientState.nearbyAction.type !== possibleAction.type ) {
+             clientState.nearbyAction = possibleAction;
+             const actionText = possibleAction.type === 'plant' ? "Press 'P' to Plant Seed" : "Press 'N' to Nurture Flower";
+             actionPromptDisplay.textContent = actionText;
+             actionPromptDisplay.classList.remove('hidden');
+        }
     } else {
-         console.log("No growing flower nearby to nurture.");
-         // Optionally show UI message: "Move closer to a growing flower!"
+        // No action nearby, clear prompt
+        if (clientState.nearbyAction) {
+             clientState.nearbyAction = null;
+             actionPromptDisplay.classList.add('hidden');
+        }
     }
 }
+
 
 function updateWeatherEffects(weather) {
-    // Example: Change background color or fog
-    switch(weather) {
+     // Use transitions or GSAP for smoother changes if possible
+    console.log("Updating weather effects for:", weather);
+    let bgColor, fogColor, fogNear, fogFar;
+    switch (weather) {
         case 'Sunny':
-            scene.background = new THREE.Color(0x87CEEB); // Sky blue
-            scene.fog = null; // Remove fog
-             // Maybe make directional light brighter
+            bgColor = new THREE.Color(0x87CEEB); fogColor = bgColor; fogNear = 50; fogFar = 100; // Less fog
+             // ADD EFFECT Placeholder: Increase directional light intensity slightly?
             break;
         case 'Cloudy':
-            scene.background = new THREE.Color(0xB0C4DE); // Light steel blue
-            scene.fog = new THREE.Fog(0xB0C4DE, 20, 60); // Add some fog
-             // Maybe dim lights slightly
+            bgColor = new THREE.Color(0xB0C4DE); fogColor = bgColor; fogNear = 20; fogFar = 60;
+             // ADD EFFECT Placeholder: Decrease light intensity slightly?
             break;
         case 'Rainy':
-            scene.background = new THREE.Color(0x778899); // Light slate gray
-            scene.fog = new THREE.Fog(0x778899, 10, 40); // Denser fog
-            // Optional: Add particle system for rain effect
+            bgColor = new THREE.Color(0x778899); fogColor = bgColor; fogNear = 10; fogFar = 40;
+             // ADD PARTICLE Placeholder: Start rain particle effect
+             // console.log("START_PARTICLE: rain");
             break;
+        default:
+            bgColor = new THREE.Color(0x87CEEB); fogColor = bgColor; fogNear = 50; fogFar = 100;
+    }
+
+    if (scene) { // Check if scene exists
+         // Smooth background color transition? Placeholder: Immediate change
+         scene.background = bgColor;
+         // Smooth fog transition? Placeholder: Immediate change
+         if (fogNear && fogFar) {
+             scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+         } else {
+             scene.fog = null;
+         }
+    }
+
+    // Stop rain particles if weather is not rainy (Placeholder)
+    if (weather !== 'Rainy') {
+        // console.log("STOP_PARTICLE: rain");
     }
 }
 
@@ -600,13 +951,53 @@ function updateUI() {
 
     // Weather
     weatherDisplay.textContent = `Weather: ${clientState.weather}`;
-    
-    // Clear previous messages if needed
-    // messageDisplay.textContent = ''; // Clear general messages unless there's a persistent one
+
+    // Player Names (already updated on join/setup)
 }
+
+// --- Timed Helpers ---
+function updateTimedHelpers() {
+    if (clientState.gameState !== 'playing' || !gameStartTime) {
+        timedHelperDisplay.classList.add('hidden');
+        return;
+    }
+
+    const elapsedSeconds = (Date.now() - gameStartTime) / 1000;
+    if (elapsedSeconds > HELPER_DURATION) {
+        timedHelperDisplay.classList.add('hidden');
+        return;
+    }
+
+    let helperText = "";
+    // Contextual helpers
+    if (elapsedSeconds < 30) {
+        helperText = "Use WASD or Arrows to move!";
+    } else if (Object.keys(resourcesOnScreen).length > 0 && clientState.resources.petals === 0 && clientState.resources.water === 0) {
+         helperText = "Walk over Pink Petals & Blue Water Drops to collect them!";
+    } else if (clientState.resources.petals > 0 && !Object.values(clientState.flowers).some(f => f.stage !== 'bloom')) {
+         // Has petals, but no flowers planted or all are bloomed
+         const hasEmptySlot = clientState.flowerSlots.some(slot => !clientState.flowers[slot.id]);
+         if(hasEmptySlot) helperText = "Got petals? Find a brown plot & press 'P' to plant!";
+         else helperText = "Collect resources!"; // All plots full?
+    } else if (clientState.resources.water > 0 && Object.values(clientState.flowers).some(f => f.stage !== 'seed' && f.stage !== 'bloom')) {
+        helperText = "Got water? Find a growing flower & press 'N' to nurture!";
+    } else if (elapsedSeconds > 60) { // General tip after a minute
+         helperText = "Work together with your partner to grow the garden!";
+    }
+
+
+    if (helperText && timedHelperDisplay.textContent !== helperText) {
+        timedHelperDisplay.textContent = helperText;
+        timedHelperDisplay.classList.remove('hidden');
+    } else if (!helperText) {
+        timedHelperDisplay.classList.add('hidden');
+    }
+}
+
 
 // --- Window Resize ---
 function onWindowResize() {
+    if (!camera || !renderer) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -614,22 +1005,41 @@ function onWindowResize() {
 
 // --- Animation Loop ---
 function animate() {
-    requestAnimationFrame(animate); // Request next frame
+    requestAnimationFrame(animate);
 
-    const deltaTime = clock.getDelta(); // Time since last frame
+    // Only run updates if the game is in the 'playing' state
+    if (clientState.gameState !== 'playing' || !scene) {
+        // If setup/waiting/finished, don't update game logic/render
+        return;
+    }
+
+    const deltaTime = clock.getDelta();
 
     // Update player movement based on input
     updatePlayerMovement(deltaTime);
-    
-    // Other animations (e.g., simple bobbing for resources)
-    const time = Date.now() * 0.001; // Get time for smooth animation
-     for (const id in resourcesOnScreen) {
-         resourcesOnScreen[id].position.y = 0.5 + Math.sin(time * 2 + resourcesOnScreen[id].id * 0.5) * 0.1; // Simple bobbing
-     }
+
+    // Update timed helpers display logic
+    updateTimedHelpers();
+
+    // Update other animations (resource bobbing)
+    const time = clock.getElapsedTime(); // Use clock's elapsed time for smoother animation
+    for (const id in resourcesOnScreen) {
+        resourcesOnScreen[id].position.y = 0.5 + Math.sin(time * 3 + parseInt(id.split('_')[1]) * 0.5) * 0.15; // Bobbing effect
+        resourcesOnScreen[id].rotation.y += deltaTime * 0.5; // Gentle rotation
+    }
+    // Flower swaying animation (Placeholder)
+    for (const id in flowersOnScreen) {
+         if (clientState.flowers[id]?.stage !== 'seed') { // Don't sway seeds
+             flowersOnScreen[id].rotation.z = Math.sin(time * 1.5 + parseInt(id.split('_')[1]) * 0.8) * 0.05; // Gentle sway
+         }
+    }
+
+    // Update controls if used for debugging
+    // if (controls) controls.update();
 
     // Render the scene
     renderer.render(scene, camera);
 }
 
 // --- Start Everything ---
-init(); // Call the initialization function when the script loads
+init(); // Call the UI initialization function when the script loads

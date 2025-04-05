@@ -1,26 +1,192 @@
+/* Keep existing styles */
 body {
-    margin: 0;
-    overflow: hidden;
-    font-family: sans-serif;
-}
-
+  margin: 0;
+  overflow: hidden;
+  font-family: "Arial", sans-serif;
+  background-color: #333;
+} /* Darker bg initially */
 #game-container {
-    width: 100vw;
-    height: 100vh;
-    display: block;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
 }
-
+#game-ui {
+  position: relative;
+  z-index: 10;
+} /* Ensure game UI is above canvas */
 #game-info {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    color: white;
-    background-color: rgba(0, 0, 0, 0.5);
-    padding: 10px;
-    border-radius: 5px;
-    z-index: 100;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  color: white;
+  background-color: rgba(0, 0, 0, 0.6);
+  padding: 10px;
+  border-radius: 8px;
+  z-index: 100;
+  font-size: 14px;
+}
+#game-info div {
+  margin-bottom: 5px;
+}
+#player-names span {
+  font-weight: bold;
 }
 
-#game-info div {
-    margin-bottom: 5px;
+/* Overlay and Modals */
+#overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 200; /* Above game UI initially */
+}
+.modal {
+  background-color: #f0e8d8; /* Creamy background */
+  padding: 30px;
+  border-radius: 15px;
+  text-align: center;
+  max-width: 500px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  border: 5px solid #d4a373; /* Wooden border */
+  color: #6b4f4f; /* Brownish text */
+}
+.modal h2 {
+  color: #a16a56;
+  margin-top: 0;
+} /* Darker heading */
+.modal h3 {
+  color: #a16a56;
+  margin-bottom: 10px;
+}
+.modal p {
+  line-height: 1.6;
+}
+.modal ul {
+  text-align: left;
+  list-style: none;
+  padding-left: 0;
+}
+.modal li {
+  margin-bottom: 8px;
+}
+.modal li::before {
+  content: "🌸";
+  margin-right: 8px; /* Flower bullet */
+}
+
+.modal button {
+  background-color: #a16a56; /* Button color */
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 20px; /* Rounded buttons */
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  margin-top: 15px;
+}
+.modal button:hover {
+  background-color: #805442;
+}
+.modal input[type="text"],
+.modal select {
+  padding: 8px;
+  margin: 5px 0 15px 0;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+  width: calc(100% - 20px);
+}
+.modal label {
+  margin-right: 5px;
+  font-weight: bold;
+}
+
+#intro-screen {
+  /* Specific styles if needed */
+}
+#setup-screen {
+  display: none; /* Initially hidden */
+} /* Hide setup initially */
+.host-join-options {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 20px;
+}
+.host-option,
+.join-option {
+  border: 1px solid #d4a373;
+  padding: 15px;
+  border-radius: 10px;
+  width: 45%;
+}
+#room-id-display {
+  margin-top: 10px;
+  font-size: 14px;
+}
+#room-id-display strong {
+  color: #c94a4a;
+  background-color: #fff0f0;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+#waiting-message {
+  margin-top: 15px;
+  color: #5a8d5a;
+  font-weight: bold;
+}
+
+.modal.active {
+  display: block;
+} /* Show active modal */
+
+/* Helper and Prompt Text */
+.helper-text {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background-color: rgba(116, 163, 116, 0.8);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  z-index: 101;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  max-width: 250px;
+  text-align: center;
+}
+.action-prompt-text {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(255, 255, 255, 0.85);
+  color: #333;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  z-index: 101;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  white-space: nowrap;
+}
+
+/* Error Message */
+.error-message {
+  color: #d9534f;
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+/* Utility Classes */
+.hidden {
+  display: none !important;
 }

@@ -4,20 +4,75 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pixel Petals</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-    <div id="game-info">
-        <div id="timer">Time: 1800</div>
-        <div id="resources">Petals: 0 | Water: 0</div>
-        <div id="weather">Weather: Sunny</div>
-        <div id="message"></div>
+    <div id="overlay">
+        <div id="intro-screen" class="modal active">
+            <h2>Welcome to Pixel Petals!</h2>
+            <p>A cozy co-op game for two.</p>
+            <div class="instructions">
+                <h3>How to Play:</h3>
+                <ul>
+                    <li>Work together with your partner to grow beautiful 'Love Bloom' flowers.</li>
+                    <li>Move your character using <strong>WASD</strong> or <strong>Arrow Keys</strong>.</li>
+                    <li>Walk over pink <strong>Pixel Petals</strong> and blue <strong>Water Droplets</strong> to collect them.</li>
+                    <li>Find an empty brown plot, get close, and press <strong>'P'</strong> to plant a seed (requires 1 Petal).</li>
+                    <li>Find a growing flower, get close, and press <strong>'N'</strong> to nurture it (requires 1 Water).</li>
+                    <li>Pay attention to the <strong>Weather</strong> - it affects how fast flowers grow!</li>
+                    <li>Grow as many flowers as you can before the <strong>Time</strong> runs out!</li>
+                </ul>
+            </div>
+            <button id="start-setup-button">Continue</button>
+        </div>
+
+        <div id="setup-screen" class="modal">
+            <h2>Get Ready to Play!</h2>
+            <div class="name-input">
+                <label for="player-name">Enter Your Name:</label>
+                <input type="text" id="player-name" maxlength="12" placeholder="PetalPusher">
+            </div>
+            <div class="host-join-options">
+                <div class="host-option">
+                    <h3>Host a New Game</h3>
+                    <label for="time-limit">Game Duration:</label>
+                    <select id="time-limit">
+                        <option value="900">15 Minutes</option>
+                        <option value="1800" selected>30 Minutes</option>
+                        <option value="2700">45 Minutes</option>
+                    </select>
+                    <button id="host-button">Host Game</button>
+                    <p id="room-id-display" class="hidden">Send this Room ID to your partner: <strong></strong></p>
+                </div>
+                <div class="join-option">
+                    <h3>Join a Game</h3>
+                    <label for="room-id-input">Enter Room ID:</label>
+                    <input type="text" id="room-id-input" placeholder="Partner's Room ID">
+                    <button id="join-button">Join Game</button>
+                </div>
+            </div>
+             <p id="setup-error" class="error-message"></p>
+             <p id="waiting-message" class="hidden">Waiting for partner to join...</p>
+        </div>
     </div>
+
+    <div id="game-ui" class="hidden">
+        <div id="game-info">
+            <div id="timer">Time: 30:00</div>
+            <div id="resources">Petals: 0 | Water: 0</div>
+            <div id="weather">Weather: Sunny</div>
+            <div id="player-names">You: <span id="my-name"></span> | Partner: <span id="partner-name">Waiting...</span></div>
+        </div>
+        <div id="timed-helper" class="helper-text"></div>
+        <div id="action-prompt" class="action-prompt-text"></div>
+         <div id="message"></div>
+    </div>
+
     <div id="game-container"></div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-    <script type="module" src="client.js"></script> 
+    <script type="module" src="./client.js"></script>
 </body>
 </html>

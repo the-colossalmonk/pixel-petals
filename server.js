@@ -1,352 +1,411 @@
-// server.js (Additions and Modifications)
+// server.js (Major Refactor for Rooms)
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const path = require('path');
-const { Vector3 } = require('three'); // Use THREE's Vector3 on server if needed for distance calcs
+// const { Vector3 } = require('three'); // Only if needed for complex server calcs
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: {
-        origin: "*", 
-        methods: ["GET", "POST"]
-    }
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Game Constants (Server Side) ---
-const GARDEN_SIZE_SERVER = 20; // Keep consistent with client
-const RESOURCE_SPAWN_RATE = 5000; // ms between spawns
-const WEATHER_CHANGE_RATE = 30000; // ms between weather changes
-const MAX_RESOURCES = 30; // Limit total resources on map
-const FLOWER_GROWTH_TIMES = { // Time units (e.g., nurture ticks) per stage
-    'seed': 1, 
-    'sprout': 2,
-    'budding': 3,
-    'bloom': Infinity // Already bloomed
-};
-const FLOWER_SLOT_POSITIONS_SERVER = [ // Needs to match client
+// --- Game Constants (Server Side - Keep as before or adjust) ---
+const GARDEN_SIZE_SERVER = 20;
+const DEFAULT_GAME_DURATION = 1800; // Default 30 mins
+const RESOURCE_SPAWN_RATE = 5000; // ms
+const WEATHER_CHANGE_RATE = 30000; // ms
+const MAX_RESOURCES_PER_ROOM = 30;
+const FLOWER_GROWTH_TIMES = { 'seed': 1, 'sprout': 2, 'budding': 3, 'bloom': Infinity };
+const FLOWER_SLOT_POSITIONS_SERVER = [
     { x: -5, z: -5 }, { x: 0, z: -5 }, { x: 5, z: -5 },
     { x: -5, z: 0 },  { x: 0, z: 0 },  { x: 5, z: 0 },
     { x: -5, z: 5 },  { x: 0, z: 5 },  { x: 5, z: 5 },
-].map((pos, index) => ({ id: `slot_${index}`, position: pos })); // Add IDs
-
+].map((pos, index) => ({ id: `slot_${index}`, position: pos }));
 const WEATHER_TYPES = ['Sunny', 'Cloudy', 'Rainy'];
-const WEATHER_GROWTH_MODIFIERS = {
-    'Sunny': 1.0,  // Normal growth
-    'Cloudy': 0.7, // Slower growth
-    'Rainy': 1.5   // Faster growth (water helps!)
-};
+const WEATHER_GROWTH_MODIFIERS = { 'Sunny': 1.0, 'Cloudy': 0.7, 'Rainy': 1.5 };
 
-// --- Game State (Server Side - More Detailed) ---
-let players = {}; // { socketId: { id, position, resources: { petals, water } } }
-let resources = {}; // { resourceId: { id, type, position } } - Use object for easy ID lookup
-let flowers = {}; // { slotId: { slotId, stage, plantedBy, nurtureProgress } }
-let gameTimer = 1800;
-let weather = 'Sunny';
-let resourceSpawnInterval;
-let weatherChangeInterval;
-let gameTimerInterval;
-let nextResourceId = 0; // Simple way to generate unique IDs
+// --- Game State Management (Per Room) ---
+let rooms = {}; // { roomId: { players: { socketId: playerData }, resources: {}, flowers: {}, timer, weather, gameDuration, state ('waiting'/'playing'/'finished'), intervals: { timer, resource, weather }, nextResourceId } }
+
+function generateRoomId() {
+    // Simple 4-char ID for easy sharing
+    return Math.random().toString(36).substring(2, 6).toUpperCase();
+}
+
+function createRoom(hostSocketId, hostName, gameDuration) {
+    const roomId = generateRoomId();
+    rooms[roomId] = {
+        players: {
+            [hostSocketId]: {
+                id: hostSocketId,
+                name: hostName || `Player_${hostSocketId.substring(0,4)}`, // Use name or default
+                position: { x: (Math.random() - 0.5) * 5, y: 0.5, z: (Math.random() - 0.5) * 5 }, // Start closer
+                resources: { petals: 0, water: 0 }
+            }
+        },
+        resources: {},
+        flowers: {},
+        timer: gameDuration || DEFAULT_GAME_DURATION,
+        weather: 'Sunny',
+        gameDuration: gameDuration || DEFAULT_GAME_DURATION,
+        state: 'waiting', // 'waiting', 'playing', 'finished'
+        intervals: {}, // Store interval IDs here
+        nextResourceId: 0,
+        hostId: hostSocketId // Track host
+    };
+    console.log(`Room ${roomId} created by ${hostName} (${hostSocketId})`);
+    return roomId;
+}
+
+function getRoomBySocketId(socketId) {
+    for (const roomId in rooms) {
+        if (rooms[roomId].players[socketId]) {
+            return rooms[roomId];
+        }
+    }
+    return null;
+}
+
+function getRoomIdBySocketId(socketId) {
+     for (const roomId in rooms) {
+        if (rooms[roomId].players[socketId]) {
+            return roomId;
+        }
+    }
+    return null;
+}
 
 
 // --- Socket.IO Connection Handling ---
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.log('User connected:', socket.id);
 
-    // Initialize player state on server
-    players[socket.id] = {
-        id: socket.id,
-        // Random starting position within bounds
-        position: { 
-             x: (Math.random() - 0.5) * (GARDEN_SIZE_SERVER * 0.8), 
-             y: 0.5, 
-             z: (Math.random() - 0.5) * (GARDEN_SIZE_SERVER * 0.8) 
-        }, 
-        resources: { petals: 0, water: 0 }
-    };
-
-    // Send initial game state to the newly connected player
-    socket.emit('initialState', {
-        playerId: socket.id,
-        players,
-        resources: Object.values(resources), // Send array of resources
-        flowers,
-        timer: gameTimer,
-        weather
+    socket.on('hostGame', ({ playerName, duration }) => {
+        // Ensure player isn't already in a room
+        if (getRoomBySocketId(socket.id)) {
+             socket.emit('setupError', { message: "You are already in a room!" });
+             return;
+        }
+        const gameDuration = parseInt(duration, 10) || DEFAULT_GAME_DURATION;
+        const roomId = createRoom(socket.id, playerName, gameDuration);
+        socket.join(roomId); // Join Socket.IO room
+        socket.emit('roomCreated', { roomId, initialState: rooms[roomId], playerId: socket.id });
+        console.log(`Player ${playerName} (${socket.id}) hosted room ${roomId}`);
     });
 
-    // Broadcast new player to others (excluding the sender)
-    socket.broadcast.emit('playerJoined', players[socket.id]);
-
-    // --- Event Handlers ---
-    
-    socket.on('playerMove', (position) => {
-        if (players[socket.id]) {
-            // Optional: Add server-side validation/bounds checking here
-            players[socket.id].position = position;
-            socket.broadcast.emit('playerMoved', { id: socket.id, position });
+    socket.on('joinGame', ({ playerName, roomId }) => {
+        // Ensure player isn't already in a room
+         if (getRoomBySocketId(socket.id)) {
+             socket.emit('setupError', { message: "You are already in a room!" });
+             return;
         }
+
+        roomId = roomId.toUpperCase(); // Match generated IDs
+        const room = rooms[roomId];
+
+        if (!room) {
+            socket.emit('setupError', { message: "Room not found." });
+            return;
+        }
+        if (room.state !== 'waiting') {
+            socket.emit('setupError', { message: "Room is already full or in progress." });
+            return;
+        }
+        if (Object.keys(room.players).length >= 2) {
+             socket.emit('setupError', { message: "Room is full." });
+             return;
+        }
+
+
+        socket.join(roomId); // Join Socket.IO room
+        // Add player to room state
+        room.players[socket.id] = {
+            id: socket.id,
+            name: playerName || `Player_${socket.id.substring(0,4)}`,
+            position: { x: (Math.random() - 0.5) * 5, y: 0.5, z: (Math.random() - 0.5) * 5 }, // Different start pos
+            resources: { petals: 0, water: 0 }
+        };
+        console.log(`Player ${playerName} (${socket.id}) joined room ${roomId}`);
+
+        // Notify the joining player
+        socket.emit('joinedRoom', { roomId, initialState: room, playerId: socket.id });
+
+        // Notify the host player
+        const hostSocketId = room.hostId;
+        io.to(hostSocketId).emit('partnerJoined', room.players[socket.id]); // Send new player's data
+
+        // Start game if room is now full
+        if (Object.keys(room.players).length === 2) {
+            room.state = 'playing';
+            startGameLoop(roomId);
+             io.to(roomId).emit('gameStart', { message: "Partner joined! Let's grow!" }); // Notify both players game starts
+            console.log(`Room ${roomId} is now full. Starting game.`);
+        }
+    });
+
+    // --- Game Event Handlers (Now Room-Specific) ---
+    socket.on('playerMove', (position) => {
+        const roomId = getRoomIdBySocketId(socket.id);
+        const room = rooms[roomId];
+        if (!room || !room.players[socket.id] || room.state !== 'playing') return;
+
+        room.players[socket.id].position = position;
+        // Broadcast movement ONLY to the other player in the room
+        socket.to(roomId).emit('playerMoved', { id: socket.id, position });
     });
 
     socket.on('collectResource', (resourceId) => {
-        const player = players[socket.id];
-        const resource = resources[resourceId];
+        const roomId = getRoomIdBySocketId(socket.id);
+        const room = rooms[roomId];
+        const player = room?.players[socket.id];
+        const resource = room?.resources[resourceId];
 
-        if (!player || !resource) return; // Ignore if player or resource doesn't exist
+        if (!player || !resource || room.state !== 'playing') return;
 
-        // Optional: Server-side distance check (prevent cheating)
-        // const playerPos = new Vector3(player.position.x, player.position.y, player.position.z);
-        // const resourcePos = new Vector3(resource.position.x, resource.position.y, resource.position.z);
-        // if (playerPos.distanceTo(resourcePos) > 2.0) { // Allow slightly larger distance than client check
-        //     console.log(`Player ${socket.id} too far to collect ${resourceId}`);
-        //     return; 
-        // }
+        // Optional: Server-side distance check if needed
 
-        console.log(`Player ${socket.id} collected resource ${resourceId}`);
+        console.log(`[${roomId}] Player ${player.name} collected resource ${resourceId}`);
 
-        // Add resource to player inventory
-        if (resource.type === 'petal') {
-            player.resources.petals++;
-        } else {
-            player.resources.water++;
-        }
+        if (resource.type === 'petal') player.resources.petals++;
+        else player.resources.water++;
 
-        // Remove resource from world state
-        delete resources[resourceId];
+        delete room.resources[resourceId];
 
-        // Notify the collecting player of their updated resources
-        socket.emit('updatePlayerResources', player.resources);
-
-        // Notify all players that the resource was removed
-        io.emit('resourceRemoved', resourceId);
+        socket.emit('updatePlayerResources', player.resources); // Update collector
+        io.to(roomId).emit('resourceRemoved', resourceId); // Notify room
     });
-    
-    socket.on('plantFlower', (data) => {
-        const player = players[socket.id];
-        const slotId = data.slotId;
 
-        if (!player || !slotId || flowers[slotId] || player.resources.petals <= 0) {
-            console.log(`Player ${socket.id} failed to plant at ${slotId}. Conditions not met.`);
-             // Optionally send a failure message back to the player
-             // socket.emit('actionFailed', { reason: "Cannot plant here or insufficient petals." });
+    socket.on('plantFlower', (data) => {
+        const roomId = getRoomIdBySocketId(socket.id);
+        const room = rooms[roomId];
+        const player = room?.players[socket.id];
+        const slotId = data?.slotId;
+        const flower = room?.flowers[slotId];
+
+        if (!player || !slotId || flower || player.resources.petals <= 0 || room.state !== 'playing') {
+            console.log(`[${roomId}] Player ${player?.name} failed plant @ ${slotId}. Conditions met? ${!player} ${!slotId} ${!!flower} ${player?.resources.petals <= 0} ${room?.state !== 'playing'}`);
+            socket.emit('actionFailed', { message: "Cannot plant here or need more petals!" });
             return;
         }
-        
-        // Optional: Server-side distance check to the slot position
-        const slot = FLOWER_SLOT_POSITIONS_SERVER.find(s => s.id === slotId);
-        if(!slot) {
-             console.error(`Slot ${slotId} not found on server.`);
-             return;
-        }
-        // const playerPos = new Vector3(player.position.x, player.position.y, player.position.z);
-        // const slotPos = new Vector3(slot.position.x, 0, slot.position.z);
-        // if (playerPos.distanceTo(slotPos) > 3.0) { // Planting range check
-        //      console.log(`Player ${socket.id} too far to plant at ${slotId}`);
-        //      return;
-        // }
 
-        console.log(`Player ${socket.id} planted a seed at ${slotId}`);
+        // Optional: Server-side distance check
+         const slot = FLOWER_SLOT_POSITIONS_SERVER.find(s => s.id === slotId);
+        if(!slot) return; // Should not happen if client sends valid ID
 
-        // Deduct resource
+        console.log(`[${roomId}] Player ${player.name} planted seed @ ${slotId}`);
+
         player.resources.petals--;
-
-        // Create flower state
-        flowers[slotId] = {
-            slotId: slotId,
-            stage: 'seed',
-            plantedBy: socket.id, // Track who planted it (for potential scoring or effects)
-            nurtureProgress: 0 // How many times it's been nurtured towards next stage
+        room.flowers[slotId] = {
+            slotId: slotId, stage: 'seed', plantedBy: socket.id, nurtureProgress: 0
         };
 
-        // Notify planting player of resource change
         socket.emit('updatePlayerResources', player.resources);
-        
-        // Notify all players about the new flower
-        io.emit('flowerPlanted', flowers[slotId]); 
+        io.to(roomId).emit('flowerPlanted', room.flowers[slotId]);
     });
-    
-    socket.on('nurtureFlower', (data) => {
-        const player = players[socket.id];
-        const slotId = data.slotId;
-        const flower = flowers[slotId];
 
-        if (!player || !flower || flower.stage === 'bloom' || player.resources.water <= 0) {
-             console.log(`Player ${socket.id} failed to nurture ${slotId}. Conditions not met.`);
-             // socket.emit('actionFailed', { reason: "Cannot nurture this flower or insufficient water." });
+    socket.on('nurtureFlower', (data) => {
+         const roomId = getRoomIdBySocketId(socket.id);
+         const room = rooms[roomId];
+         const player = room?.players[socket.id];
+         const slotId = data?.slotId;
+         const flower = room?.flowers[slotId];
+
+        if (!player || !flower || flower.stage === 'bloom' || player.resources.water <= 0 || room.state !== 'playing') {
+            console.log(`[${roomId}] Player ${player?.name} failed nurture @ ${slotId}. Conditions met? ${!player} ${!flower} ${flower?.stage === 'bloom'} ${player?.resources.water <= 0} ${room?.state !== 'playing'}`);
+            socket.emit('actionFailed', { message: "Cannot nurture this or need more water!" });
             return;
         }
-        
+
         // Optional: Server-side distance check
-        // ... (similar distance check as planting) ...
 
-        console.log(`Player ${socket.id} nurtured flower at ${slotId}`);
-        
-        // Deduct resource
+        console.log(`[${roomId}] Player ${player.name} nurtured flower @ ${slotId}`);
+
         player.resources.water--;
-        
-        // Apply nurture progress, considering weather
-        const modifier = WEATHER_GROWTH_MODIFIERS[weather] || 1.0;
-        flower.nurtureProgress += (1 * modifier); // Base progress of 1, modified by weather
+        const modifier = WEATHER_GROWTH_MODIFIERS[room.weather] || 1.0;
+        flower.nurtureProgress += (1 * modifier);
 
-        // Check if flower grows to the next stage
         let grown = false;
         const requiredProgress = FLOWER_GROWTH_TIMES[flower.stage];
-        
+
         if (flower.nurtureProgress >= requiredProgress) {
             grown = true;
-            flower.nurtureProgress = 0; // Reset progress for next stage
-            switch (flower.stage) {
+            flower.nurtureProgress = 0;
+             switch (flower.stage) {
                 case 'seed':   flower.stage = 'sprout'; break;
                 case 'sprout': flower.stage = 'budding'; break;
                 case 'budding':flower.stage = 'bloom'; break;
-                // Bloom stage is terminal
             }
-            console.log(`Flower ${slotId} grew to stage: ${flower.stage}`);
+             console.log(`[${roomId}] Flower ${slotId} grew to stage: ${flower.stage}`);
         }
 
-        // Notify nurturing player of resource change
         socket.emit('updatePlayerResources', player.resources);
-        
-        // Notify all players if the flower grew
         if (grown) {
-             io.emit('flowerGrown', flower);
+            io.to(roomId).emit('flowerGrown', flower);
         } else {
-             // Optionally, send a confirmation that nurture happened but didn't cause growth yet
-             // io.emit('flowerNurtured', { slotId: slotId, progress: flower.nurtureProgress }); // Less common
+            // Can optionally send nurture success without growth
+             // socket.emit('flowerNurtured', { slotId: slotId }); // Notify nurturer
         }
     });
-
 
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
-        // Remove player from state
-        delete players[socket.id];
-        // Broadcast player disconnection
-        io.emit('playerLeft', socket.id);
+        const roomId = getRoomIdBySocketId(socket.id);
+        if (roomId && rooms[roomId]) {
+            const room = rooms[roomId];
+            const remainingPlayerName = room.players[socket.id]?.name || 'Someone';
+            console.log(`${remainingPlayerName} left room ${roomId}`);
 
-        if (Object.keys(players).length === 0) {
-            stopGameLoop();
-            console.log("No players left. Stopping game loops.");
-            // Reset game state fully when last player leaves?
-            resetGameState(); 
+            delete room.players[socket.id]; // Remove player
+
+            // Notify remaining player
+             socket.to(roomId).emit('partnerLeft', { message: `${remainingPlayerName} disconnected.` });
+
+            // Stop game loops, set room state
+            stopGameLoop(roomId);
+            room.state = 'waiting'; // Or 'finished'/'aborted'
+
+             // If room becomes empty, delete it after a short delay (cleanup)
+             if (Object.keys(room.players).length === 0) {
+                console.log(`Room ${roomId} is empty, deleting.`);
+                delete rooms[roomId];
+             } else {
+                // If host leaves, maybe assign host role to remaining player? Or just leave as waiting.
+                // For simplicity, just set to waiting. The remaining player might leave too.
+                 room.state = 'waiting';
+                 console.log(`Room ${roomId} set to 'waiting' after player left.`);
+                 // Notify remaining player they can wait or leave
+                 // io.to(roomId).emit('roomStateUpdate', { state: 'waiting' });
+             }
         }
     });
-
-    // Start game loops if this is the first player
-    if (Object.keys(players).length === 1 && !gameTimerInterval) {
-        startGameLoop();
-        console.log("First player joined. Starting game loops.");
-    } else if (Object.keys(players).length > 0 && !gameTimerInterval) {
-        // If server restarted but players reconnected, restart loops
-         startGameLoop();
-         console.log("Players present, restarting game loops.");
-    }
 });
 
-// --- Game Loop Functions (Server Side - Implementation) ---
-function startGameLoop() {
-    stopGameLoop(); // Ensure no duplicates run
-    resetGameState(); // Start fresh when loops begin
-    
-    console.log("Starting game loop...");
-    gameTimer = 1800; // Reset timer
-    io.emit('timerUpdate', gameTimer); // Send initial timer value
+// --- Game Loop Functions (Now Per Room) ---
+function startGameLoop(roomId) {
+    const room = rooms[roomId];
+    if (!room || room.state !== 'playing') return;
 
-    gameTimerInterval = setInterval(() => {
-        gameTimer--;
-        io.emit('timerUpdate', gameTimer); 
-        if (gameTimer <= 0) {
-            endGame();
+    stopGameLoop(roomId); // Ensure no duplicates
+
+    console.log(`[${roomId}] Starting game loop... Duration: ${room.gameDuration}s`);
+    room.timer = room.gameDuration;
+    io.to(roomId).emit('timerUpdate', room.timer); // Send initial timer
+
+    // Store interval IDs within the room object
+    room.intervals.timer = setInterval(() => {
+        if (!rooms[roomId] || room.state !== 'playing') {
+            clearInterval(room.intervals.timer); return;
+        }
+        room.timer--;
+        io.to(roomId).emit('timerUpdate', room.timer);
+        if (room.timer <= 0) {
+            endGame(roomId);
         }
     }, 1000);
 
-    resourceSpawnInterval = setInterval(spawnResource, RESOURCE_SPAWN_RATE);
-    weatherChangeInterval = setInterval(changeWeather, WEATHER_CHANGE_RATE);
+    room.intervals.resource = setInterval(() => spawnResource(roomId), RESOURCE_SPAWN_RATE);
+    room.intervals.weather = setInterval(() => changeWeather(roomId), WEATHER_CHANGE_RATE);
 }
 
-function stopGameLoop() {
-    console.log("Stopping game loop intervals.");
-    clearInterval(gameTimerInterval);
-    clearInterval(resourceSpawnInterval);
-    clearInterval(weatherChangeInterval);
-    gameTimerInterval = null;
-    resourceSpawnInterval = null;
-    weatherChangeInterval = null;
+function stopGameLoop(roomId) {
+    const room = rooms[roomId];
+    if (room?.intervals) {
+        console.log(`[${roomId}] Stopping game loop intervals.`);
+        clearInterval(room.intervals.timer);
+        clearInterval(room.intervals.resource);
+        clearInterval(room.intervals.weather);
+        room.intervals = {}; // Clear interval IDs
+    }
 }
 
-function resetGameState() {
-     console.log("Resetting game state.");
-    // Keep players, but reset resources, flowers, timer, weather
-    resources = {};
-    flowers = {};
-    gameTimer = 1800;
-    weather = 'Sunny';
-    nextResourceId = 0;
-    // Notify clients about the reset state (except players list)
-     io.emit('gameStateReset', { 
-        resources: [], 
-        flowers: {}, 
-        timer: gameTimer, 
-        weather: weather 
+function resetRoomGameState(roomId) {
+    // Optional: Function to reset a room for a new game without kicking players
+    const room = rooms[roomId];
+    if (!room) return;
+    console.log(`[${roomId}] Resetting game state.`);
+    room.resources = {};
+    room.flowers = {};
+    room.timer = room.gameDuration;
+    room.weather = 'Sunny';
+    room.nextResourceId = 0;
+    room.state = 'playing'; // Or 'waiting' if reset before start
+    // Notify clients about the reset state
+    io.to(roomId).emit('gameStateReset', {
+        resources: [], flowers: {}, timer: room.timer, weather: room.weather
     });
-    // Clients should handle 'gameStateReset' to clear their local copies
 }
 
-function endGame() {
-    console.log("Game Over!");
-    stopGameLoop();
-    // Calculate final results if needed (e.g., total flowers bloomed)
+function endGame(roomId) {
+    const room = rooms[roomId];
+    if (!room) return;
+    console.log(`[${roomId}] Game Over!`);
+    room.state = 'finished';
+    stopGameLoop(roomId);
+
     let finalMessage = "Time's up! Look at the beautiful garden you grew together!";
-    let fullyBloomed = 0;
-    for(const id in flowers) {
-        if (flowers[id].stage === 'bloom') {
-            fullyBloomed++;
-        }
-    }
+    let fullyBloomed = Object.values(room.flowers).filter(f => f.stage === 'bloom').length;
     finalMessage += ` You bloomed ${fullyBloomed} Love Blooms!`;
-    
-    io.emit('gameOver', { message: finalMessage }); 
-    // Consider delaying the reset or providing a "play again" mechanism
-    // setTimeout(resetGameState, 10000); // Example: Reset after 10 seconds
+
+    io.to(roomId).emit('gameOver', { message: finalMessage });
+    // Consider adding a "Play Again" button/flow on the client
 }
 
 
-function spawnResource() {
-    if (Object.keys(resources).length >= MAX_RESOURCES) {
-        return; // Don't spawn if max capacity reached
+function spawnResource(roomId) {
+    const room = rooms[roomId];
+     // Check if room exists and is playing before proceeding
+    if (!room || room.state !== 'playing') {
+        // If the interval is still running for a non-existent/non-playing room, stop it.
+        // This can happen if a room ended/deleted right before the interval fired.
+         if (room && room.intervals.resource) {
+             clearInterval(room.intervals.resource);
+             delete room.intervals.resource;
+         }
+         return;
     }
-    
-    const resourceId = `res_${nextResourceId++}`;
-    const type = Math.random() < 0.6 ? 'petal' : 'water'; // 60% chance petals
+
+    if (Object.keys(room.resources).length >= MAX_RESOURCES_PER_ROOM) {
+        return;
+    }
+
+    const resourceId = `res_${room.nextResourceId++}`;
+    const type = Math.random() < 0.6 ? 'petal' : 'water';
     const position = {
         x: (Math.random() - 0.5) * GARDEN_SIZE_SERVER,
-        y: 0.5, // Spawn slightly above ground
+        y: 0.5,
         z: (Math.random() - 0.5) * GARDEN_SIZE_SERVER
     };
 
     const newResource = { id: resourceId, type, position };
-    resources[resourceId] = newResource;
+    room.resources[resourceId] = newResource;
 
-    console.log(`Spawning resource: ${type} at (${position.x.toFixed(1)}, ${position.z.toFixed(1)})`);
-    
-    // Broadcast the new resource to all clients
-    io.emit('resourceSpawned', newResource);
+    // console.log(`[${roomId}] Spawning resource: ${type}`); // Less verbose logging
+    io.to(roomId).emit('resourceSpawned', newResource);
 }
 
-function changeWeather() {
-    const previousWeather = weather;
-    const possibleWeathers = WEATHER_TYPES.filter(w => w !== previousWeather); // Don't pick the same weather twice
-    weather = possibleWeathers[Math.floor(Math.random() * possibleWeathers.length)];
+function changeWeather(roomId) {
+    const room = rooms[roomId];
+    // Check if room exists and is playing before proceeding
+    if (!room || room.state !== 'playing') {
+         if (room && room.intervals.weather) {
+            clearInterval(room.intervals.weather);
+            delete room.intervals.weather;
+         }
+        return;
+    }
 
-    console.log(`Weather changed to: ${weather}`);
+    const previousWeather = room.weather;
+    const possibleWeathers = WEATHER_TYPES.filter(w => w !== previousWeather);
+    room.weather = possibleWeathers[Math.floor(Math.random() * possibleWeathers.length)];
 
-    // Broadcast the weather update
-    io.emit('weatherUpdate', weather);
+    console.log(`[${roomId}] Weather changed to: ${room.weather}`);
+    io.to(roomId).emit('weatherUpdate', room.weather);
 }
 
 // Start the server

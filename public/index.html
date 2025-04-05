@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel Petals</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-info">
+        <div id="timer">Time: 1800</div>
+        <div id="resources">Petals: 0 | Water: 0</div>
+        <div id="weather">Weather: Sunny</div>
+        <div id="message"></div>
+    </div>
+    <div id="game-container"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script> 
+
+    <script type="module" src="client.js"></script> 
+</body>
+</html>

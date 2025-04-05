@@ -1,0 +1,26 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    font-family: sans-serif;
+}
+
+#game-container {
+    width: 100vw;
+    height: 100vh;
+    display: block;
+}
+
+#game-info {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 10px;
+    border-radius: 5px;
+    z-index: 100;
+}
+
+#game-info div {
+    margin-bottom: 5px;
+}

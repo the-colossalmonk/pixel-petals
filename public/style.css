@@ -1,192 +1,385 @@
-/* Keep existing styles */
+/* Basic Reset & Body */
 body {
-  margin: 0;
-  overflow: hidden;
-  font-family: "Arial", sans-serif;
-  background-color: #333;
-} /* Darker bg initially */
-#game-container {
-  width: 100vw;
-  height: 100vh;
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 1;
+    margin: 0;
+    overflow: hidden;
+    font-family: 'Arial', sans-serif;
+    background-color: #333; /* Darker bg initially */
+    -webkit-user-select: none; /* Disable text selection */
+    -ms-user-select: none;
+    user-select: none;
+    color: #333;
 }
+
+/* Game Container */
+#game-container {
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+}
+
+/* Game UI Layer */
 #game-ui {
-  position: relative;
-  z-index: 10;
-} /* Ensure game UI is above canvas */
+    position: relative; /* Changed from absolute for better context */
+    width: 100%;
+    height: 100%;
+    z-index: 10;
+    pointer-events: none; /* Allow clicks through UI to canvas unless on a button */
+}
+#game-ui > * {
+    pointer-events: auto; /* Enable interaction for children */
+}
+
+/* Game Info Box */
 #game-info {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  color: white;
-  background-color: rgba(0, 0, 0, 0.6);
-  padding: 10px;
-  border-radius: 8px;
-  z-index: 100;
-  font-size: 14px;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.65);
+    padding: 10px 15px;
+    border-radius: 8px;
+    z-index: 100;
+    font-size: clamp(12px, 1.5vw, 14px); /* Responsive font size */
+    display: grid;
+    grid-template-columns: auto auto; /* Two columns for info items */
+    gap: 5px 15px; /* Row gap, Column gap */
+    align-items: center;
+    max-width: calc(100% - 30px); /* Prevent overflow */
 }
 #game-info div {
-  margin-bottom: 5px;
+    margin-bottom: 0; /* Remove bottom margin for grid */
+    white-space: nowrap; /* Prevent wrapping */
+}
+#player-names {
+    grid-column: 1 / -1; /* Span both columns */
+}
+#room-code-display {
+    grid-column: 1 / -1;
+    font-size: smaller;
+    opacity: 0.8;
+}
+#room-code-value {
+    font-weight: bold;
+    color: #ffcc66; /* Gold color for room code */
+    margin-left: 5px;
 }
 #player-names span {
-  font-weight: bold;
+    font-weight: bold;
 }
 
 /* Overlay and Modals */
 #overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 200; /* Above game UI initially */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.75);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 200; /* Above game UI initially */
+    transition: opacity 0.3s ease-out;
+}
+#overlay.hidden { /* For smooth hiding */
+    opacity: 0;
+    pointer-events: none;
 }
 .modal {
-  background-color: #f0e8d8; /* Creamy background */
-  padding: 30px;
-  border-radius: 15px;
-  text-align: center;
-  max-width: 500px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-  border: 5px solid #d4a373; /* Wooden border */
-  color: #6b4f4f; /* Brownish text */
+    background-color: #f0e8d8; /* Creamy background */
+    padding: clamp(15px, 5vw, 30px); /* Responsive padding */
+    border-radius: 15px;
+    text-align: center;
+    width: 90%;
+    max-width: 550px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    border: 5px solid #d4a373; /* Wooden border */
+    color: #6b4f4f; /* Brownish text */
+    max-height: 90vh;
+    overflow-y: auto; /* Allow scrolling on small screens */
+    display: none; /* Hidden by default, use .active to show */
+}
+.modal.active {
+    display: block;
 }
 .modal h2 {
-  color: #a16a56;
-  margin-top: 0;
-} /* Darker heading */
+    color: #a16a56;
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: clamp(20px, 5vw, 24px);
+}
 .modal h3 {
-  color: #a16a56;
-  margin-bottom: 10px;
+    color: #a16a56;
+    margin-bottom: 10px;
+    font-size: clamp(16px, 4vw, 18px);
 }
 .modal p {
-  line-height: 1.6;
+    line-height: 1.6;
+    margin-bottom: 15px;
+    font-size: clamp(14px, 3vw, 16px);
 }
 .modal ul {
-  text-align: left;
-  list-style: none;
-  padding-left: 0;
+    text-align: left;
+    list-style: none;
+    padding-left: 0;
+    margin-bottom: 20px;
 }
 .modal li {
-  margin-bottom: 8px;
+    margin-bottom: 8px;
+    font-size: clamp(13px, 2.8vw, 15px);
+    line-height: 1.5;
 }
 .modal li::before {
-  content: "🌸";
-  margin-right: 8px; /* Flower bullet */
+    content: "🌸"; /* Flower bullet */
+    margin-right: 8px;
+    font-size: 1.1em;
 }
-
 .modal button {
-  background-color: #a16a56; /* Button color */
-  color: white;
-  border: none;
-  padding: 10px 20px;
-  border-radius: 20px; /* Rounded buttons */
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
-  margin-top: 15px;
+    background-color: #a16a56; /* Button color */
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 20px; /* Rounded buttons */
+    font-size: clamp(15px, 3.5vw, 16px);
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.1s ease;
+    margin-top: 15px;
+    display: inline-block; /* Needed for margin */
 }
 .modal button:hover {
-  background-color: #805442;
+    background-color: #805442;
 }
-.modal input[type="text"],
-.modal select {
-  padding: 8px;
-  margin: 5px 0 15px 0;
-  border-radius: 5px;
-  border: 1px solid #ccc;
-  width: calc(100% - 20px);
+.modal button:active {
+    transform: scale(0.98);
+}
+.modal button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+.modal input[type="text"], .modal select {
+    padding: 10px;
+    margin: 8px 0 15px 0;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    width: calc(100% - 22px); /* Account for padding */
+    font-size: clamp(14px, 3vw, 16px);
+    box-sizing: border-box;
 }
 .modal label {
-  margin-right: 5px;
-  font-weight: bold;
+    margin-right: 5px;
+    font-weight: bold;
+    font-size: clamp(14px, 3vw, 16px);
+    display: block; /* Labels on own line */
+    margin-bottom: 3px;
 }
 
-#intro-screen {
-  /* Specific styles if needed */
-}
-#setup-screen {
-  display: none; /* Initially hidden */
-} /* Hide setup initially */
+/* Specific Modal Sections */
+#intro-screen { /* Initially active */ }
+#setup-screen { /* Hidden by default */ }
+.name-input { margin-bottom: 20px; }
 .host-join-options {
-  display: flex;
-  justify-content: space-around;
-  margin-top: 20px;
+    display: flex;
+    flex-direction: column; /* Stack on smaller screens */
+    gap: 20px;
+    margin-top: 20px;
+    align-items: stretch; /* Make items take full width */
 }
-.host-option,
-.join-option {
-  border: 1px solid #d4a373;
-  padding: 15px;
-  border-radius: 10px;
-  width: 45%;
+@media (min-width: 500px) { /* Side-by-side on wider screens */
+    .host-join-options {
+        flex-direction: row;
+        justify-content: space-around;
+    }
+    .host-option, .join-option {
+        width: 48%; /* Adjust width */
+    }
 }
-#room-id-display {
-  margin-top: 10px;
-  font-size: 14px;
+.host-option, .join-option {
+    border: 1px solid #d4a373;
+    padding: 15px;
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.3);
 }
-#room-id-display strong {
-  color: #c94a4a;
-  background-color: #fff0f0;
-  padding: 2px 5px;
-  border-radius: 3px;
-}
-#waiting-message {
-  margin-top: 15px;
-  color: #5a8d5a;
-  font-weight: bold;
-}
+#room-id-display { margin-top: 10px; font-size: 14px; word-break: break-all;}
+#room-id-display strong { color: #c94a4a; background-color: #fff0f0; padding: 2px 5px; border-radius: 3px; font-size: 1.1em;}
+#waiting-message { margin-top: 15px; color: #5a8d5a; font-weight: bold; }
+.error-message { color: #d9534f; font-weight: bold; margin-top: 10px; min-height: 1.2em; /* Reserve space */}
 
-.modal.active {
-  display: block;
-} /* Show active modal */
+#reconnect-prompt { /* Hidden by default */ }
+#force-refresh-button { margin-top: 20px; background-color: #c94a4a; }
+#force-refresh-button:hover { background-color: #a13a3a; }
 
-/* Helper and Prompt Text */
-.helper-text {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background-color: rgba(116, 163, 116, 0.8);
-  color: white;
-  padding: 8px 12px;
-  border-radius: 20px;
-  font-size: 14px;
-  z-index: 101;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  max-width: 250px;
-  text-align: center;
+/* Helper Text Styling */
+.helper-text-overlay {
+    position: absolute;
+    bottom: 15%; /* Position above mobile controls */
+    left: 50%;
+    transform: translateX(-50%);
+    width: 85%;
+    max-width: 450px;
+    background-color: rgba(0, 0, 0, 0.75);
+    color: #f0e8d8;
+    padding: 12px 18px;
+    border-radius: 10px;
+    text-align: center;
+    font-size: clamp(14px, 2.5vw, 16px);
+    z-index: 101;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.5s ease-out;
 }
+.helper-text-overlay.hidden { opacity: 0; }
+
+/* Hint Corner Styling */
+.hint-text {
+    position: absolute;
+    top: 10px; /* Move to top right */
+    right: 10px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: clamp(11px, 1.5vw, 12px);
+    z-index: 101;
+    pointer-events: none;
+    max-width: 180px;
+    text-align: right;
+    opacity: 1;
+    transition: opacity 0.5s ease-out;
+}
+.hint-text.hidden { opacity: 0; }
+
+/* Action Prompt Styling */
 .action-prompt-text {
-  position: absolute;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: rgba(255, 255, 255, 0.85);
-  color: #333;
-  padding: 10px 15px;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: bold;
-  z-index: 101;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  white-space: nowrap;
+    position: absolute;
+    bottom: 20%; /* Raise slightly above helper overlay */
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(255, 255, 255, 0.9);
+    color: #333;
+    padding: 10px 15px;
+    border-radius: 20px; /* Rounded */
+    font-size: clamp(14px, 2.5vw, 16px);
+    font-weight: bold;
+    z-index: 101;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    white-space: nowrap;
+    pointer-events: none;
+    border: 2px solid #a16a56;
+    opacity: 1;
+    transition: opacity 0.3s ease-out;
+}
+.action-prompt-text.hidden { opacity: 0; }
+
+/* Mobile Controls Styling */
+#mobile-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 150px; /* Adjust height as needed */
+    z-index: 110;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end; /* Align to bottom */
+    pointer-events: none; /* Base container doesn't block */
+    padding: 0 20px 15px 20px; /* Add bottom padding */
+    box-sizing: border-box;
+}
+/* Hide on non-touch devices using media queries (hover) */
+/* @media (hover: hover) and (pointer: fine) {
+    #mobile-controls {
+         display: none;
+    }
+} */
+
+#joystick-area {
+    width: 120px;
+    height: 120px;
+    position: relative; /* Relative for thumb positioning */
+    pointer-events: auto; /* Enable touch here */
+    align-self: center; /* Center vertically within controls area */
+    margin-left: 10px; /* Spacing from edge */
+}
+#joystick-base {
+    width: 100%;
+    height: 100%;
+    background-color: rgba(100, 100, 100, 0.3);
+    border-radius: 50%;
+    position: absolute;
+    top: 0; /* Use top/left instead of bottom/left */
+    left: 0;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+}
+#joystick-thumb {
+    width: 50px;
+    height: 50px;
+    background-color: rgba(80, 80, 80, 0.6);
+    border-radius: 50%;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%); /* Center thumb initially */
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    transition: opacity 0.2s ease-out; /* Fade effect */
+    opacity: 0.6; /* Semi-transparent initially */
 }
 
-/* Error Message */
-.error-message {
-  color: #d9534f;
-  font-weight: bold;
-  margin-top: 10px;
+#action-buttons {
+    display: flex;
+    gap: 20px; /* Increased gap */
+    pointer-events: auto; /* Enable touch here */
+    margin-right: 10px; /* Spacing from edge */
+    align-self: center; /* Center vertically */
 }
+#action-buttons button {
+    width: 65px; /* Slightly larger buttons */
+    height: 65px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    color: white;
+    font-size: 22px;
+    font-weight: bold;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    -webkit-tap-highlight-color: transparent; /* Remove tap highlight */
+    transition: background-color 0.1s ease-out, transform 0.1s ease-out;
+    cursor: pointer;
+}
+#button-plant { background-color: rgba(255, 105, 180, 0.7); /* Pinkish */ }
+#button-nurture { background-color: rgba(135, 206, 250, 0.7); /* Bluish */ }
+#action-buttons button:active {
+    background-color: rgba(255, 255, 255, 0.6);
+    transform: scale(0.95);
+}
+
+/* General Message Area Styling */
+#message {
+    position: absolute;
+    top: 15%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 8px 15px;
+    border-radius: 5px;
+    z-index: 150;
+    font-size: 14px;
+    opacity: 0;
+    transition: opacity 0.3s ease-out;
+    pointer-events: none;
+}
+#message:not(:empty) { /* Show only when it has content */
+    opacity: 1;
+}
+
 
 /* Utility Classes */
 .hidden {
-  display: none !important;
+    display: none !important;
 }

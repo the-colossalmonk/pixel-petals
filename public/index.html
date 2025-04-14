@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Pixel Petals</title>
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="overlay">
@@ -15,10 +15,10 @@
                 <h3>How to Play:</h3>
                 <ul>
                     <li>Work together with your partner to grow beautiful 'Love Bloom' flowers.</li>
-                    <li>Move your character using <strong>WASD</strong> or <strong>Arrow Keys</strong>.</li>
+                    <li>Move your character using <strong>WASD</strong> / <strong>Arrow Keys</strong> or the <strong>on-screen Joystick</strong>.</li>
                     <li>Walk over pink <strong>Pixel Petals</strong> and blue <strong>Water Droplets</strong> to collect them.</li>
-                    <li>Find an empty brown plot, get close, and press <strong>'P'</strong> to plant a seed (requires 1 Petal).</li>
-                    <li>Find a growing flower, get close, and press <strong>'N'</strong> to nurture it (requires 1 Water).</li>
+                    <li>Find an empty brown plot, get close, and press <strong>'P'</strong> (or the 'P' button) to plant a seed (requires 1 Petal).</li>
+                    <li>Find a growing flower, get close, and press <strong>'N'</strong> (or the 'N' button) to nurture it (requires 1 Water).</li>
                     <li>Pay attention to the <strong>Weather</strong> - it affects how fast flowers grow!</li>
                     <li>Grow as many flowers as you can before the <strong>Time</strong> runs out!</li>
                 </ul>
@@ -54,6 +54,12 @@
              <p id="setup-error" class="error-message"></p>
              <p id="waiting-message" class="hidden">Waiting for partner to join...</p>
         </div>
+
+        <div id="reconnect-prompt" class="modal">
+            <h2>Disconnected</h2>
+            <p id="reconnect-message">Attempting to reconnect...</p>
+            <button id="force-refresh-button" class="hidden">Refresh Page</button>
+        </div>
     </div>
 
     <div id="game-ui" class="hidden">
@@ -62,17 +68,39 @@
             <div id="resources">Petals: 0 | Water: 0</div>
             <div id="weather">Weather: Sunny</div>
             <div id="player-names">You: <span id="my-name"></span> | Partner: <span id="partner-name">Waiting...</span></div>
+            <div id="room-code-display">Room: <span id="room-code-value">----</span></div>
         </div>
-        <div id="timed-helper" class="helper-text"></div>
-        <div id="action-prompt" class="action-prompt-text"></div>
+        <div id="timed-helper" class="helper-text-overlay hidden"></div>
+        <div id="hint-corner" class="hint-text hidden"></div>
+        <div id="action-prompt" class="action-prompt-text hidden"></div>
          <div id="message"></div>
+
+        <div id="mobile-controls">
+            <div id="joystick-area">
+                <div id="joystick-base">
+                    <div id="joystick-thumb"></div>
+                </div>
+            </div>
+            <div id="action-buttons">
+                <button id="button-plant">P</button>
+                <button id="button-nurture">N</button>
+            </div>
+        </div>
     </div>
 
     <div id="game-container"></div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://app.unpkg.com/three@0.128.0/files/build/three.module.js",
+                "FontLoader": "https://app.unpkg.com/three@0.128.0/examples/jsm/loaders/FontLoader.js",
+                "TextGeometry": "https://unpkg.com/three@0.128.0/examples/jsm/geometries/TextGeometry.js"
+            }
+        }
+    </script>
+    
     <script type="module" src="./client.js"></script>
 </body>
 </html>
